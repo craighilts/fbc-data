@@ -977,10 +977,12 @@ def main():
         # Player selection
         col1, col2 = st.columns([2, 1])
         with col1:
+            # Default to Connolly if available
+            default_idx = all_players.index("Connolly") if "Connolly" in all_players else 0
             selected_player = st.selectbox(
                 "Select a Player",
                 options=all_players,
-                index=0
+                index=default_idx
             )
 
         if selected_player:
