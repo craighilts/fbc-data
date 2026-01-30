@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import anthropic
 
 # Page config
 st.set_page_config(
@@ -302,6 +303,92 @@ def get_leaderboard(df):
 
     return pd.DataFrame(leaderboard).sort_values('Points', ascending=False).reset_index(drop=True)
 
+def prepare_data_context(df):
+    """Prepare a summary of the FBC data for Claude."""
+    # Get all players
+    all_players = sorted(set(df['Player 1'].dropna().unique()) |
+                        set(df[df['Player 2'].notna()]['Player 2'].unique()))
+    all_players = [p for p in all_players if isinstance(p, str)]
+
+    # Get leaderboard
+    leaderboard = get_leaderboard(df)
+
+    # Get list of courses
+    courses = df['Course'].dropna().unique().tolist()
+
+    # Get list of FBC events
+    events = df['FBC'].dropna().unique().tolist()
+    events = sorted([int(e) for e in events if pd.notna(e)])
+
+    # Build context string
+    context = f"""FBC (Freddie B Cup) Golf Tournament Data Summary:
+
+PLAYERS ({len(all_players)} total): {', '.join(all_players)}
+
+LEADERBOARD (Top 15 by points):
+"""
+    for i, row in leaderboard.head(15).iterrows():
+        context += f"  {row['Player']}: {row['Points']:.1f} pts, Record: {row['Record']}, Win%: {row['Win%']:.1%}, {row['Matches']} matches\n"
+
+    context += f"\nCOURSES ({len(courses)} total): {', '.join(str(c) for c in courses[:30])}"
+    if len(courses) > 30:
+        context += f"... and {len(courses) - 30} more"
+
+    context += f"\n\nFBC EVENTS: {', '.join(str(e) for e in events)}"
+
+    context += "\n\nDETAILED MATCH DATA (recent 100 matches):\n"
+    recent_matches = df.tail(100)
+    for _, row in recent_matches.iterrows():
+        p1 = row.get('Player 1', '')
+        p2 = row.get('Player 2', '')
+        opp1 = row.get('Opponent1', '')
+        opp2 = row.get('Opponent2', '')
+        course = row.get('Course', '')
+        result = row.get('W/L/T', '')
+        fbc = row.get('FBC', '')
+        match_type = row.get('Singes/Doubles', '')
+
+        if pd.notna(p2) and p2:
+            players = f"{p1}/{p2}"
+        else:
+            players = str(p1)
+
+        if pd.notna(opp2) and opp2:
+            opponents = f"{opp1}/{opp2}"
+        else:
+            opponents = str(opp1) if pd.notna(opp1) else ''
+
+        context += f"  FBC {int(fbc) if pd.notna(fbc) else '?'}: {players} vs {opponents} at {course} - {result} ({match_type})\n"
+
+    return context
+
+def ask_claude(question, data_context):
+    """Send a question to Claude with FBC data context."""
+    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+
+    system_prompt = """You are an expert analyst for the FBC (Freddie B Cup), a golf match play tournament between friends.
+You have access to historical match data and should answer questions about player statistics, head-to-head records,
+course performance, and tournament history. Be concise but thorough. If you need to calculate statistics,
+show your work briefly. Use the data provided to give accurate answers."""
+
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        system=system_prompt,
+        messages=[
+            {
+                "role": "user",
+                "content": f"""Here is the FBC tournament data:
+
+{data_context}
+
+Question: {question}"""
+            }
+        ]
+    )
+
+    return message.content[0].text
+
 def format_pct(val):
     """Format percentage for display."""
     return f"{val:.1%}"
@@ -328,7 +415,7 @@ def main():
     all_players = [p for p in all_players if isinstance(p, str)]
 
     # Create tabs
-    tab1, tab2 = st.tabs(["📊 Player Stats", "🏆 Leaderboard"])
+    tab1, tab2, tab3 = st.tabs(["📊 Player Stats", "🏆 Leaderboard", "🤖 Ask Claude"])
 
     with tab1:
         # Player selection
@@ -521,6 +608,100 @@ def main():
                 <div class="stat-label">Most Matches ({top_matches['Matches']})</div>
             </div>
             """, unsafe_allow_html=True)
+
+    with tab3:
+        st.markdown("<h3 class='section-header'>Ask Claude About FBC Data</h3>", unsafe_allow_html=True)
+
+        st.markdown("""
+        Ask any question about FBC tournament data - player stats, head-to-head records,
+        course performance, historical trends, and more!
+        """)
+
+        # Example questions
+        st.markdown("**Try these example questions:**")
+
+        example_questions = [
+            "Who has the best record against Connolly?",
+            "What's Hilts' win percentage at Pebble Beach?",
+            "Who is the best doubles partner for Hilts?",
+            "Which player has improved the most over time?",
+            "What course does Gallagher perform best at?",
+            "Who has the best record in singles matches?"
+        ]
+
+        # Create columns for example question buttons
+        cols = st.columns(2)
+        for i, question in enumerate(example_questions):
+            with cols[i % 2]:
+                if st.button(question, key=f"example_{i}", use_container_width=True):
+                    st.session_state.claude_question = question
+
+        st.markdown("---")
+
+        # Initialize session state for the question if not exists
+        if 'claude_question' not in st.session_state:
+            st.session_state.claude_question = ""
+
+        # Text input for custom questions
+        user_question = st.text_input(
+            "Your question:",
+            value=st.session_state.claude_question,
+            placeholder="e.g., Who has the best overall win percentage?",
+            key="question_input"
+        )
+
+        # Update session state when text input changes
+        if user_question != st.session_state.claude_question:
+            st.session_state.claude_question = user_question
+
+        # Submit button
+        if st.button("Ask Claude", type="primary", use_container_width=True):
+            if user_question.strip():
+                # Check if API key is configured
+                if "ANTHROPIC_API_KEY" not in st.secrets:
+                    st.error("Anthropic API key not configured. Please add ANTHROPIC_API_KEY to your Streamlit secrets.")
+                else:
+                    with st.spinner("Claude is analyzing the FBC data..."):
+                        try:
+                            # Prepare data context
+                            data_context = prepare_data_context(df)
+
+                            # Get response from Claude
+                            response = ask_claude(user_question, data_context)
+
+                            # Display response
+                            st.markdown("---")
+                            st.markdown("**Claude's Answer:**")
+                            st.markdown(f"""
+                            <div style="background: white; padding: 1.5rem; border-radius: 10px;
+                                        border-left: 4px solid {COLORS['primary']}; margin-top: 1rem;">
+                                {response}
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        except anthropic.AuthenticationError:
+                            st.error("Invalid API key. Please check your ANTHROPIC_API_KEY in Streamlit secrets.")
+                        except Exception as e:
+                            st.error(f"Error getting response from Claude: {str(e)}")
+            else:
+                st.warning("Please enter a question.")
+
+        # Info about API key setup
+        with st.expander("How to set up your API key"):
+            st.markdown("""
+            To use the Ask Claude feature, you need to add your Anthropic API key to Streamlit secrets:
+
+            **For local development:**
+            1. Create a file `.streamlit/secrets.toml` in your project directory
+            2. Add: `ANTHROPIC_API_KEY = "your-api-key-here"`
+
+            **For Streamlit Cloud:**
+            1. Go to your app settings
+            2. Click "Secrets" in the sidebar
+            3. Add: `ANTHROPIC_API_KEY = "your-api-key-here"`
+
+            Get your API key at: https://console.anthropic.com/
+            """)
 
 if __name__ == "__main__":
     main()
