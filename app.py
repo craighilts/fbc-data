@@ -96,6 +96,57 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 @st.cache_data
+def load_cups_data():
+    """Load and process the Cups data showing which players won each cup."""
+    cups_raw = pd.read_excel('FBC_Data.xlsx', sheet_name='Cups')
+
+    # The data starts at row 1 (0-indexed), with headers in row 0
+    # Column 1 is Player, columns 2-13 are FBC 1-12, then Total, Played, %, Lost
+    cups_df = cups_raw.iloc[1:31].copy()  # Rows 1-30 contain player data
+    cups_df.columns = ['Drop', 'Player', 'FBC 1', 'FBC 2', 'FBC 3', 'FBC 4', 'FBC 5', 'FBC 6',
+                       'FBC 7', 'FBC 8', 'FBC 9', 'FBC 10', 'FBC 11', 'FBC 12',
+                       'Total', 'Played', 'Win%', 'Lost']
+    cups_df = cups_df.drop(columns=['Drop'])
+    cups_df = cups_df[cups_df['Player'].notna()]
+
+    # Convert Win% to float
+    cups_df['Win%'] = pd.to_numeric(cups_df['Win%'], errors='coerce')
+    cups_df['Total'] = pd.to_numeric(cups_df['Total'], errors='coerce')
+    cups_df['Played'] = pd.to_numeric(cups_df['Played'], errors='coerce')
+    cups_df['Lost'] = pd.to_numeric(cups_df['Lost'], errors='coerce')
+
+    return cups_df
+
+def get_cups_summary(cups_df):
+    """Get summary statistics about cup wins."""
+    summary = []
+    for _, row in cups_df.iterrows():
+        player = row['Player']
+        total_wins = row['Total'] if pd.notna(row['Total']) else 0
+        total_played = row['Played'] if pd.notna(row['Played']) else 0
+        win_pct = row['Win%'] if pd.notna(row['Win%']) else 0
+
+        # Count individual cup results
+        cup_results = []
+        for i in range(1, 13):
+            result = row.get(f'FBC {i}', 'X')
+            if result == 1 or result == '1':
+                cup_results.append(f"FBC {i}: Won")
+            elif result == 0 or result == '0':
+                cup_results.append(f"FBC {i}: Lost")
+            # X means didn't participate
+
+        summary.append({
+            'Player': player,
+            'Cups Won': int(total_wins),
+            'Cups Played': int(total_played),
+            'Cup Win%': win_pct,
+            'Cup Results': cup_results
+        })
+
+    return sorted(summary, key=lambda x: x['Cups Won'], reverse=True)
+
+@st.cache_data
 def load_data():
     """Load and process the FBC data."""
     df = pd.read_excel('FBC_Data.xlsx', sheet_name='Archives')
@@ -303,73 +354,287 @@ def get_leaderboard(df):
 
     return pd.DataFrame(leaderboard).sort_values('Points', ascending=False).reset_index(drop=True)
 
-def prepare_data_context(df):
-    """Prepare a summary of the FBC data for Claude."""
-    # Get all players
+def extract_fbc_number(question):
+    """Extract FBC event number from a question if mentioned."""
+    import re
+    # Match patterns like "FBC 11", "FBC11", "fbc 11", "FBC XI", etc.
+    patterns = [
+        r'fbc\s*(\d+)',  # FBC 11, FBC11
+        r'fbc\s*(xi+|iv|v?i{0,3})\b',  # Roman numerals
+    ]
+    question_lower = question.lower()
+    for pattern in patterns:
+        match = re.search(pattern, question_lower)
+        if match:
+            num = match.group(1)
+            # Convert roman numerals if needed
+            roman_map = {'i': 1, 'ii': 2, 'iii': 3, 'iv': 4, 'v': 5,
+                        'vi': 6, 'vii': 7, 'viii': 8, 'ix': 9, 'x': 10,
+                        'xi': 11, 'xii': 12, 'xiii': 13}
+            if num in roman_map:
+                return roman_map[num]
+            try:
+                return int(num)
+            except ValueError:
+                continue
+    return None
+
+def extract_player_names(question, all_players):
+    """Extract player names mentioned in a question."""
+    question_lower = question.lower()
+    mentioned = []
+    for player in all_players:
+        if player.lower() in question_lower:
+            mentioned.append(player)
+    return mentioned
+
+def extract_course_names(question, all_courses):
+    """Extract course names mentioned in a question."""
+    question_lower = question.lower()
+    mentioned = []
+    for course in all_courses:
+        if isinstance(course, str) and course.lower() in question_lower:
+            mentioned.append(course)
+    # Also check for partial matches (e.g., "Pebble Beach" in "Pebble Beach Golf Links")
+    for course in all_courses:
+        if isinstance(course, str):
+            # Check if any significant word from the question matches the course
+            words = question_lower.split()
+            for word in words:
+                if len(word) > 4 and word in course.lower() and course not in mentioned:
+                    mentioned.append(course)
+    return mentioned
+
+def calculate_player_stats_for_subset(df, players=None):
+    """Calculate stats for all players in a subset of matches."""
+    if players is None:
+        players = set(df['Player 1'].dropna().unique()) | set(df[df['Player 2'].notna()]['Player 2'].unique())
+        players = [p for p in players if isinstance(p, str)]
+
+    stats = []
+    for player in players:
+        player_matches = df[(df['Player 1'] == player) | (df['Player 2'] == player)]
+        if len(player_matches) == 0:
+            continue
+
+        wins = player_matches['W'].sum()
+        losses = player_matches['L'].sum()
+        ties = player_matches['T'].sum()
+        points = player_matches['Points earned'].sum()
+        matches = len(player_matches)
+
+        stats.append({
+            'Player': player,
+            'Points': points,
+            'Wins': int(wins),
+            'Losses': int(losses),
+            'Ties': int(ties),
+            'Matches': matches,
+            'Record': f"{int(wins)}-{int(losses)}-{int(ties)}",
+            'Win%': (wins + 0.5 * ties) / matches if matches > 0 else 0
+        })
+
+    return sorted(stats, key=lambda x: x['Points'], reverse=True)
+
+def prepare_data_context(df, question, cups_df=None):
+    """Prepare relevant FBC data context based on the question."""
+    # Get all players and courses for reference
     all_players = sorted(set(df['Player 1'].dropna().unique()) |
                         set(df[df['Player 2'].notna()]['Player 2'].unique()))
     all_players = [p for p in all_players if isinstance(p, str)]
+    all_courses = df['Course'].dropna().unique().tolist()
+    all_events = sorted([int(e) for e in df['FBC'].dropna().unique() if pd.notna(e)])
 
-    # Get leaderboard
-    leaderboard = get_leaderboard(df)
+    # Check if question is about cups/championships
+    question_lower = question.lower()
+    is_cups_question = any(word in question_lower for word in ['cup', 'cups', 'champion', 'championship', 'won', 'winning team', 'title'])
 
-    # Get list of courses
-    courses = df['Course'].dropna().unique().tolist()
+    # Extract entities from the question
+    fbc_num = extract_fbc_number(question)
+    mentioned_players = extract_player_names(question, all_players)
+    mentioned_courses = extract_course_names(question, all_courses)
 
-    # Get list of FBC events
-    events = df['FBC'].dropna().unique().tolist()
-    events = sorted([int(e) for e in events if pd.notna(e)])
+    context_parts = []
+    context_parts.append("FBC (Freddie B Cup) Golf Tournament Data\n" + "="*50)
 
-    # Build context string
-    context = f"""FBC (Freddie B Cup) Golf Tournament Data Summary:
+    # If a specific FBC event is mentioned, provide complete data for that event
+    if fbc_num is not None:
+        event_df = df[df['FBC'] == fbc_num]
+        if len(event_df) > 0:
+            location = event_df['Geographic Location'].iloc[0] if pd.notna(event_df['Geographic Location'].iloc[0]) else "Unknown"
+            courses = event_df['Course'].dropna().unique().tolist()
 
-PLAYERS ({len(all_players)} total): {', '.join(all_players)}
+            context_parts.append(f"\n\nFBC {fbc_num} - {location}")
+            context_parts.append(f"Courses: {', '.join(str(c) for c in courses)}")
+            context_parts.append(f"Total matches: {len(event_df)}")
 
-LEADERBOARD (Top 15 by points):
-"""
-    for i, row in leaderboard.head(15).iterrows():
-        context += f"  {row['Player']}: {row['Points']:.1f} pts, Record: {row['Record']}, Win%: {row['Win%']:.1%}, {row['Matches']} matches\n"
+            # Match type breakdown
+            match_types = event_df['Singes/Doubles'].value_counts().to_dict()
+            context_parts.append(f"Match types: {', '.join(f'{k}: {v}' for k, v in match_types.items())}")
 
-    context += f"\nCOURSES ({len(courses)} total): {', '.join(str(c) for c in courses[:30])}"
-    if len(courses) > 30:
-        context += f"... and {len(courses) - 30} more"
+            # Calculate and show complete leaderboard for this event
+            context_parts.append(f"\nFBC {fbc_num} COMPLETE LEADERBOARD:")
+            event_stats = calculate_player_stats_for_subset(event_df)
+            for i, stat in enumerate(event_stats, 1):
+                context_parts.append(f"  {i}. {stat['Player']}: {stat['Points']:.1f} pts, Record: {stat['Record']}, Win%: {stat['Win%']:.1%}")
 
-    context += f"\n\nFBC EVENTS: {', '.join(str(e) for e in events)}"
+            # Show all matches with details
+            context_parts.append(f"\nALL FBC {fbc_num} MATCHES ({len(event_df)} total):")
+            for _, row in event_df.iterrows():
+                p1 = row.get('Player 1', '')
+                p2 = row.get('Player 2', '')
+                opp1 = row.get('Opponent1', '')
+                opp2 = row.get('Opponent2', '')
+                course = row.get('Course', '')
+                wlt = row.get('W/L/T', '')
+                result = row.get('Result', '')
+                match_type = row.get('Singes/Doubles', '')
+                format_type = row.get('Format', '')
+                pts = row.get('Points earned', 0)
 
-    context += "\n\nDETAILED MATCH DATA (recent 100 matches):\n"
-    recent_matches = df.tail(100)
-    for _, row in recent_matches.iterrows():
-        p1 = row.get('Player 1', '')
-        p2 = row.get('Player 2', '')
-        opp1 = row.get('Opponent1', '')
-        opp2 = row.get('Opponent2', '')
-        course = row.get('Course', '')
-        result = row.get('W/L/T', '')
-        fbc = row.get('FBC', '')
-        match_type = row.get('Singes/Doubles', '')
+                if pd.notna(p2) and p2:
+                    players = f"{p1}/{p2}"
+                else:
+                    players = str(p1)
 
-        if pd.notna(p2) and p2:
-            players = f"{p1}/{p2}"
-        else:
-            players = str(p1)
+                if pd.notna(opp2) and opp2:
+                    opponents = f"{opp1}/{opp2}"
+                else:
+                    opponents = str(opp1) if pd.notna(opp1) else ''
 
-        if pd.notna(opp2) and opp2:
-            opponents = f"{opp1}/{opp2}"
-        else:
-            opponents = str(opp1) if pd.notna(opp1) else ''
+                context_parts.append(f"  {players} vs {opponents} | {match_type}/{format_type} | {wlt} {result} | {pts:.1f} pts | {course}")
 
-        context += f"  FBC {int(fbc) if pd.notna(fbc) else '?'}: {players} vs {opponents} at {course} - {result} ({match_type})\n"
+    # If specific players are mentioned, provide their complete stats
+    if mentioned_players:
+        for player in mentioned_players:
+            player_matches = df[(df['Player 1'] == player) | (df['Player 2'] == player)]
+            if len(player_matches) == 0:
+                continue
 
-    return context
+            context_parts.append(f"\n\n{player.upper()}'S COMPLETE STATS:")
 
-def ask_claude(question, data_context):
-    """Send a question to Claude with FBC data context."""
+            # Overall stats
+            stats = calculate_player_stats_for_subset(player_matches, [player])[0]
+            context_parts.append(f"  Overall: {stats['Points']:.1f} pts, Record: {stats['Record']}, Win%: {stats['Win%']:.1%}, {stats['Matches']} matches")
+
+            # By match type
+            context_parts.append(f"\n  By Match Type:")
+            for match_type in ['Doubles', 'Singles', 'FTAS']:
+                type_matches = player_matches[player_matches['Singes/Doubles'] == match_type]
+                if len(type_matches) > 0:
+                    type_stats = calculate_player_stats_for_subset(type_matches, [player])
+                    if type_stats:
+                        s = type_stats[0]
+                        context_parts.append(f"    {match_type}: {s['Record']}, {s['Points']:.1f} pts, {s['Win%']:.1%}")
+
+            # By FBC event
+            context_parts.append(f"\n  By FBC Event:")
+            for fbc in sorted(player_matches['FBC'].dropna().unique()):
+                fbc_matches = player_matches[player_matches['FBC'] == fbc]
+                fbc_stats = calculate_player_stats_for_subset(fbc_matches, [player])
+                if fbc_stats:
+                    s = fbc_stats[0]
+                    context_parts.append(f"    FBC {int(fbc)}: {s['Record']}, {s['Points']:.1f} pts")
+
+            # Head-to-head records
+            context_parts.append(f"\n  Head-to-Head Records:")
+            h2h = get_head_to_head(df, player)
+            if not h2h.empty:
+                for _, row in h2h.head(15).iterrows():
+                    context_parts.append(f"    vs {row['Opponent']}: {row['Record']} ({row['Matches']} matches)")
+
+    # If specific courses are mentioned, provide performance data
+    if mentioned_courses:
+        for course in mentioned_courses:
+            course_matches = df[df['Course'] == course]
+            if len(course_matches) == 0:
+                continue
+
+            context_parts.append(f"\n\nPERFORMANCE AT {course.upper()}:")
+            context_parts.append(f"  Total matches played: {len(course_matches)}")
+
+            # Stats by player at this course
+            course_stats = calculate_player_stats_for_subset(course_matches)
+            context_parts.append(f"\n  Player stats at this course:")
+            for stat in course_stats[:15]:
+                context_parts.append(f"    {stat['Player']}: {stat['Record']}, {stat['Win%']:.1%}")
+
+    # Always include overall context
+    context_parts.append(f"\n\nOVERALL FBC CONTEXT:")
+    context_parts.append(f"  Total FBC events: {len(all_events)} ({min(all_events)}-{max(all_events)})")
+    context_parts.append(f"  Total matches in database: {len(df)}")
+    context_parts.append(f"  Total players: {len(all_players)}")
+    context_parts.append(f"  Players: {', '.join(all_players)}")
+
+    # Overall leaderboard
+    context_parts.append(f"\n  LIFETIME LEADERBOARD (Top 20):")
+    overall_stats = calculate_player_stats_for_subset(df)
+    for i, stat in enumerate(overall_stats[:20], 1):
+        context_parts.append(f"    {i}. {stat['Player']}: {stat['Points']:.1f} pts, {stat['Record']}, {stat['Win%']:.1%}")
+
+    # Add Cups data if available and relevant
+    if cups_df is not None and (is_cups_question or mentioned_players):
+        context_parts.append(f"\n\nCUP CHAMPIONSHIPS DATA:")
+        context_parts.append("(1 = won the cup, 0 = lost the cup, X = did not participate)")
+
+        # Full cups leaderboard
+        context_parts.append(f"\n  CUP WINS LEADERBOARD:")
+        cups_summary = get_cups_summary(cups_df)
+        for i, player_cups in enumerate(cups_summary, 1):
+            if player_cups['Cups Played'] > 0:
+                context_parts.append(f"    {i}. {player_cups['Player']}: {player_cups['Cups Won']} cups won out of {player_cups['Cups Played']} played ({player_cups['Cup Win%']:.1%})")
+
+        # Detailed cup results for mentioned players
+        if mentioned_players:
+            for player in mentioned_players:
+                player_cup_data = cups_df[cups_df['Player'].str.lower() == player.lower()]
+                if len(player_cup_data) == 0:
+                    # Try partial match
+                    player_cup_data = cups_df[cups_df['Player'].str.lower().str.contains(player.lower(), na=False)]
+
+                if len(player_cup_data) > 0:
+                    row = player_cup_data.iloc[0]
+                    context_parts.append(f"\n  {player.upper()}'S CUP HISTORY:")
+                    for fbc_num in range(1, 13):
+                        result = row.get(f'FBC {fbc_num}', 'X')
+                        if result == 1 or result == '1':
+                            context_parts.append(f"    FBC {fbc_num}: WON (on winning team)")
+                        elif result == 0 or result == '0':
+                            context_parts.append(f"    FBC {fbc_num}: LOST (on losing team)")
+                        else:
+                            context_parts.append(f"    FBC {fbc_num}: Did not participate")
+                    total = row.get('Total', 0)
+                    played = row.get('Played', 0)
+                    context_parts.append(f"    TOTAL: {int(total)} cups won out of {int(played)} played")
+
+    return '\n'.join(context_parts)
+
+def ask_claude(question, df, cups_df=None):
+    """Send a question to Claude with relevant FBC data context."""
     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+
+    # Load cups data if not provided
+    if cups_df is None:
+        try:
+            cups_df = load_cups_data()
+        except Exception:
+            cups_df = None
+
+    # Prepare context based on the question
+    data_context = prepare_data_context(df, question, cups_df)
 
     system_prompt = """You are an expert analyst for the FBC (Freddie B Cup), a golf match play tournament between friends.
 You have access to historical match data and should answer questions about player statistics, head-to-head records,
-course performance, and tournament history. Be concise but thorough. If you need to calculate statistics,
-show your work briefly. Use the data provided to give accurate answers."""
+course performance, tournament history, and CUP CHAMPIONSHIPS (which team won each FBC event).
+
+IMPORTANT: The data provided includes pre-calculated statistics and complete match records. Use these directly -
+do not try to recalculate from raw data. When asked about points, wins, or records, cite the exact numbers from
+the leaderboard or stats provided.
+
+For CUP questions: A "cup win" means the player was on the winning TEAM for that FBC event. This is different
+from individual match wins. The Cups data shows team championship results.
+
+Be concise but thorough. Always cite the specific data that supports your answer."""
 
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
@@ -378,11 +643,13 @@ show your work briefly. Use the data provided to give accurate answers."""
         messages=[
             {
                 "role": "user",
-                "content": f"""Here is the FBC tournament data:
+                "content": f"""Here is the FBC tournament data relevant to your question:
 
 {data_context}
 
-Question: {question}"""
+Question: {question}
+
+Please answer based on the data provided above. Cite specific statistics."""
             }
         ]
     )
@@ -414,8 +681,15 @@ def main():
                         set(df[df['Player 2'].notna()]['Player 2'].unique()))
     all_players = [p for p in all_players if isinstance(p, str)]
 
+    # Load cups data
+    try:
+        cups_df = load_cups_data()
+    except Exception as e:
+        cups_df = None
+        st.warning(f"Could not load Cups data: {e}")
+
     # Create tabs
-    tab1, tab2, tab3 = st.tabs(["📊 Player Stats", "🏆 Leaderboard", "🤖 Ask Claude"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Player Stats", "🏆 Leaderboard", "🏅 Cups", "🤖 Ask Claude"])
 
     with tab1:
         # Player selection
@@ -610,6 +884,89 @@ def main():
             """, unsafe_allow_html=True)
 
     with tab3:
+        st.markdown("<h3 class='section-header'>🏅 Cup Championships</h3>", unsafe_allow_html=True)
+
+        if cups_df is not None:
+            st.markdown("""
+            This shows which players were on the **winning team** at each FBC event.
+            - **1** = On winning team
+            - **0** = On losing team
+            - **X** = Did not participate
+            """)
+
+            # Summary stats
+            cups_summary = get_cups_summary(cups_df)
+
+            col1, col2, col3 = st.columns(3)
+
+            # Most cups won
+            if cups_summary:
+                top_winner = cups_summary[0]
+                with col1:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value">{top_winner['Player']}</div>
+                        <div class="stat-label">Most Cups ({top_winner['Cups Won']})</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # Best cup win percentage (min 5 cups played)
+                qualified = [p for p in cups_summary if p['Cups Played'] >= 5]
+                if qualified:
+                    best_pct = max(qualified, key=lambda x: x['Cup Win%'])
+                    with col2:
+                        st.markdown(f"""
+                        <div class="stat-card">
+                            <div class="stat-value">{best_pct['Player']}</div>
+                            <div class="stat-label">Best Cup Win% ({best_pct['Cup Win%']:.1%})</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                # Most cups played
+                most_played = max(cups_summary, key=lambda x: x['Cups Played'])
+                with col3:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value">{most_played['Player']}</div>
+                        <div class="stat-label">Most Cups Played ({most_played['Cups Played']})</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            st.markdown("<h4 class='section-header'>Cup Results by Player</h4>", unsafe_allow_html=True)
+
+            # Create display dataframe
+            display_df = cups_df.copy()
+
+            # Format Win% as percentage
+            display_df['Win%'] = display_df['Win%'].apply(lambda x: f"{x:.1%}" if pd.notna(x) else "")
+
+            # Sort options
+            sort_by = st.selectbox(
+                "Sort by",
+                options=['Total', 'Win%', 'Played', 'Player'],
+                index=0,
+                key="cups_sort"
+            )
+
+            if sort_by == 'Player':
+                display_df = display_df.sort_values('Player')
+            elif sort_by == 'Win%':
+                display_df = display_df.sort_values(cups_df['Win%'], ascending=False)
+            else:
+                display_df = display_df.sort_values(sort_by, ascending=False)
+
+            # Show the table
+            st.dataframe(
+                display_df[['Player', 'FBC 1', 'FBC 2', 'FBC 3', 'FBC 4', 'FBC 5', 'FBC 6',
+                           'FBC 7', 'FBC 8', 'FBC 9', 'FBC 10', 'FBC 11', 'FBC 12',
+                           'Total', 'Played', 'Win%']],
+                hide_index=True,
+                use_container_width=True
+            )
+        else:
+            st.error("Cups data could not be loaded.")
+
+    with tab4:
         st.markdown("<h3 class='section-header'>Ask Claude About FBC Data</h3>", unsafe_allow_html=True)
 
         st.markdown("""
@@ -621,12 +978,12 @@ def main():
         st.markdown("**Try these example questions:**")
 
         example_questions = [
+            "Who has won the most cups?",
             "Who has the best record against Connolly?",
             "What's Hilts' win percentage at Pebble Beach?",
             "Who is the best doubles partner for Hilts?",
-            "Which player has improved the most over time?",
-            "What course does Gallagher perform best at?",
-            "Who has the best record in singles matches?"
+            "Who had the most points at FBC 11?",
+            "How many cups has Lynch won?"
         ]
 
         # Create columns for example question buttons
@@ -663,11 +1020,8 @@ def main():
                 else:
                     with st.spinner("Claude is analyzing the FBC data..."):
                         try:
-                            # Prepare data context
-                            data_context = prepare_data_context(df)
-
-                            # Get response from Claude
-                            response = ask_claude(user_question, data_context)
+                            # Get response from Claude (data filtering happens inside)
+                            response = ask_claude(user_question, df, cups_df)
 
                             # Display response
                             st.markdown("---")
