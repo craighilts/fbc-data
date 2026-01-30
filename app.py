@@ -656,6 +656,285 @@ Please answer based on the data provided above. Cite specific statistics."""
 
     return message.content[0].text
 
+def get_direct_h2h(df, player1, player2):
+    """Get direct head-to-head record between two specific players."""
+    # Find matches where player1 was on one side and player2 on the opposing side
+    p1_matches = df[(df['Player 1'] == player1) | (df['Player 2'] == player1)]
+
+    h2h_matches = p1_matches[
+        (p1_matches['Opponent1'] == player2) |
+        (p1_matches['Opponent2'] == player2) |
+        (p1_matches['Singles Opponent'] == player2)
+    ]
+
+    if len(h2h_matches) == 0:
+        return {'wins': 0, 'losses': 0, 'ties': 0, 'matches': 0}
+
+    wins = h2h_matches['W'].sum()
+    losses = h2h_matches['L'].sum()
+    ties = h2h_matches['T'].sum()
+
+    return {
+        'wins': int(wins),
+        'losses': int(losses),
+        'ties': int(ties),
+        'matches': len(h2h_matches)
+    }
+
+def get_stats_by_format(df, player):
+    """Get player's record broken down by format (Singles, Doubles, FTAS)."""
+    player_matches = df[(df['Player 1'] == player) | (df['Player 2'] == player)]
+
+    format_stats = {}
+    for fmt in ['Singles', 'Doubles', 'FTAS']:
+        fmt_matches = player_matches[player_matches['Singes/Doubles'] == fmt]
+        if len(fmt_matches) > 0:
+            wins = fmt_matches['W'].sum()
+            losses = fmt_matches['L'].sum()
+            ties = fmt_matches['T'].sum()
+            total = len(fmt_matches)
+            format_stats[fmt] = {
+                'wins': int(wins),
+                'losses': int(losses),
+                'ties': int(ties),
+                'matches': total,
+                'win_pct': (wins + 0.5 * ties) / total if total > 0 else 0
+            }
+        else:
+            format_stats[fmt] = {'wins': 0, 'losses': 0, 'ties': 0, 'matches': 0, 'win_pct': 0}
+
+    return format_stats
+
+def get_best_worst_courses(df, player, top_n=3):
+    """Get player's best and worst courses by win percentage."""
+    player_matches = df[(df['Player 1'] == player) | (df['Player 2'] == player)]
+
+    course_stats = []
+    for course in player_matches['Course'].dropna().unique():
+        course_matches = player_matches[player_matches['Course'] == course]
+        if len(course_matches) >= 2:  # At least 2 matches for meaningful stats
+            wins = course_matches['W'].sum()
+            losses = course_matches['L'].sum()
+            ties = course_matches['T'].sum()
+            total = len(course_matches)
+            win_pct = (wins + 0.5 * ties) / total if total > 0 else 0
+            course_stats.append({
+                'course': course,
+                'wins': int(wins),
+                'losses': int(losses),
+                'ties': int(ties),
+                'matches': total,
+                'win_pct': win_pct
+            })
+
+    if not course_stats:
+        return [], []
+
+    sorted_courses = sorted(course_stats, key=lambda x: x['win_pct'], reverse=True)
+    best = sorted_courses[:top_n]
+    worst = sorted_courses[-top_n:][::-1] if len(sorted_courses) >= top_n else sorted_courses[::-1]
+
+    return best, worst
+
+def get_best_partners(df, player, top_n=3):
+    """Get player's best doubles partners by win percentage."""
+    doubles = df[df['Singes/Doubles'] == 'Doubles']
+
+    # Find all partners
+    as_p1 = doubles[doubles['Player 1'] == player].copy()
+    as_p1['Partner'] = as_p1['Player 2']
+
+    as_p2 = doubles[doubles['Player 2'] == player].copy()
+    as_p2['Partner'] = as_p2['Player 1']
+
+    all_partner_matches = pd.concat([as_p1, as_p2])
+
+    if len(all_partner_matches) == 0:
+        return []
+
+    partner_stats = []
+    for partner in all_partner_matches['Partner'].dropna().unique():
+        partner_matches = all_partner_matches[all_partner_matches['Partner'] == partner]
+        if len(partner_matches) >= 2:  # At least 2 matches
+            wins = partner_matches['W'].sum()
+            losses = partner_matches['L'].sum()
+            ties = partner_matches['T'].sum()
+            total = len(partner_matches)
+            win_pct = (wins + 0.5 * ties) / total if total > 0 else 0
+            partner_stats.append({
+                'partner': partner,
+                'wins': int(wins),
+                'losses': int(losses),
+                'ties': int(ties),
+                'matches': total,
+                'win_pct': win_pct
+            })
+
+    sorted_partners = sorted(partner_stats, key=lambda x: (x['win_pct'], x['matches']), reverse=True)
+    return sorted_partners[:top_n]
+
+def get_recent_form(df, player, n_matches=10):
+    """Get player's recent form (last n matches)."""
+    player_matches = df[(df['Player 1'] == player) | (df['Player 2'] == player)]
+    recent = player_matches.tail(n_matches)
+
+    if len(recent) == 0:
+        return {'wins': 0, 'losses': 0, 'ties': 0, 'matches': 0, 'win_pct': 0}
+
+    wins = recent['W'].sum()
+    losses = recent['L'].sum()
+    ties = recent['T'].sum()
+    total = len(recent)
+
+    return {
+        'wins': int(wins),
+        'losses': int(losses),
+        'ties': int(ties),
+        'matches': total,
+        'win_pct': (wins + 0.5 * ties) / total if total > 0 else 0
+    }
+
+def get_player_course_stats(df, player, course):
+    """Get player's performance at a specific course."""
+    player_matches = df[(df['Player 1'] == player) | (df['Player 2'] == player)]
+    course_matches = player_matches[player_matches['Course'] == course]
+
+    if len(course_matches) == 0:
+        return None
+
+    wins = course_matches['W'].sum()
+    losses = course_matches['L'].sum()
+    ties = course_matches['T'].sum()
+    total = len(course_matches)
+
+    return {
+        'wins': int(wins),
+        'losses': int(losses),
+        'ties': int(ties),
+        'matches': total,
+        'win_pct': (wins + 0.5 * ties) / total if total > 0 else 0
+    }
+
+def get_partner_chemistry(df, player1, player2):
+    """Get the record when two players are partners in doubles."""
+    doubles = df[df['Singes/Doubles'] == 'Doubles']
+
+    # Find matches where both players were on the same team
+    team_matches = doubles[
+        ((doubles['Player 1'] == player1) & (doubles['Player 2'] == player2)) |
+        ((doubles['Player 1'] == player2) & (doubles['Player 2'] == player1))
+    ]
+
+    if len(team_matches) == 0:
+        return None
+
+    wins = team_matches['W'].sum()
+    losses = team_matches['L'].sum()
+    ties = team_matches['T'].sum()
+    total = len(team_matches)
+
+    return {
+        'wins': int(wins),
+        'losses': int(losses),
+        'ties': int(ties),
+        'matches': total,
+        'win_pct': (wins + 0.5 * ties) / total if total > 0 else 0
+    }
+
+def predict_match(df, player1, player2, course=None, is_doubles=False, partner1=None, partner2=None):
+    """Predict match outcome based on historical data."""
+    factors = []
+    p1_score = 50.0  # Start at 50-50
+
+    # Factor 1: Overall win percentage
+    p1_stats = get_player_stats(df, player1)
+    p2_stats = get_player_stats(df, player2)
+
+    if p1_stats and p2_stats:
+        p1_overall = p1_stats['win_pct']
+        p2_overall = p2_stats['win_pct']
+        overall_diff = (p1_overall - p2_overall) * 30  # Weight: up to +/- 15%
+        p1_score += overall_diff
+        factors.append({
+            'factor': 'Overall Win %',
+            'p1_value': f"{p1_overall:.1%}",
+            'p2_value': f"{p2_overall:.1%}",
+            'edge': player1 if p1_overall > p2_overall else (player2 if p2_overall > p1_overall else 'Even'),
+            'impact': abs(overall_diff)
+        })
+
+    # Factor 2: Head-to-head record
+    h2h = get_direct_h2h(df, player1, player2)
+    if h2h['matches'] > 0:
+        h2h_pct = h2h['wins'] / h2h['matches'] if h2h['matches'] > 0 else 0.5
+        h2h_diff = (h2h_pct - 0.5) * 40  # Weight: up to +/- 20%
+        p1_score += h2h_diff
+        factors.append({
+            'factor': 'Head-to-Head',
+            'p1_value': f"{h2h['wins']}-{h2h['losses']}-{h2h['ties']}",
+            'p2_value': f"{h2h['losses']}-{h2h['wins']}-{h2h['ties']}",
+            'edge': player1 if h2h['wins'] > h2h['losses'] else (player2 if h2h['losses'] > h2h['wins'] else 'Even'),
+            'impact': abs(h2h_diff)
+        })
+
+    # Factor 3: Recent form
+    p1_recent = get_recent_form(df, player1, 10)
+    p2_recent = get_recent_form(df, player2, 10)
+
+    if p1_recent['matches'] > 0 and p2_recent['matches'] > 0:
+        recent_diff = (p1_recent['win_pct'] - p2_recent['win_pct']) * 20  # Weight: up to +/- 10%
+        p1_score += recent_diff
+        factors.append({
+            'factor': 'Recent Form (Last 10)',
+            'p1_value': f"{p1_recent['wins']}-{p1_recent['losses']}-{p1_recent['ties']} ({p1_recent['win_pct']:.1%})",
+            'p2_value': f"{p2_recent['wins']}-{p2_recent['losses']}-{p2_recent['ties']} ({p2_recent['win_pct']:.1%})",
+            'edge': player1 if p1_recent['win_pct'] > p2_recent['win_pct'] else (player2 if p2_recent['win_pct'] > p1_recent['win_pct'] else 'Even'),
+            'impact': abs(recent_diff)
+        })
+
+    # Factor 4: Course performance (if course specified)
+    if course:
+        p1_course = get_player_course_stats(df, player1, course)
+        p2_course = get_player_course_stats(df, player2, course)
+
+        if p1_course and p2_course:
+            course_diff = (p1_course['win_pct'] - p2_course['win_pct']) * 20  # Weight: up to +/- 10%
+            p1_score += course_diff
+            factors.append({
+                'factor': f'Course ({course[:20]}...)',
+                'p1_value': f"{p1_course['wins']}-{p1_course['losses']}-{p1_course['ties']} ({p1_course['win_pct']:.1%})",
+                'p2_value': f"{p2_course['wins']}-{p2_course['losses']}-{p2_course['ties']} ({p2_course['win_pct']:.1%})",
+                'edge': player1 if p1_course['win_pct'] > p2_course['win_pct'] else (player2 if p2_course['win_pct'] > p1_course['win_pct'] else 'Even'),
+                'impact': abs(course_diff)
+            })
+
+    # Factor 5: Partner chemistry (for doubles)
+    if is_doubles and partner1 and partner2:
+        team1_chem = get_partner_chemistry(df, player1, partner1)
+        team2_chem = get_partner_chemistry(df, player2, partner2)
+
+        if team1_chem and team2_chem:
+            chem_diff = (team1_chem['win_pct'] - team2_chem['win_pct']) * 20  # Weight: up to +/- 10%
+            p1_score += chem_diff
+            factors.append({
+                'factor': 'Partner Chemistry',
+                'p1_value': f"{team1_chem['wins']}-{team1_chem['losses']}-{team1_chem['ties']} ({team1_chem['win_pct']:.1%})",
+                'p2_value': f"{team2_chem['wins']}-{team2_chem['losses']}-{team2_chem['ties']} ({team2_chem['win_pct']:.1%})",
+                'edge': f"{player1}/{partner1}" if team1_chem['win_pct'] > team2_chem['win_pct'] else (f"{player2}/{partner2}" if team2_chem['win_pct'] > team1_chem['win_pct'] else 'Even'),
+                'impact': abs(chem_diff)
+            })
+
+    # Clamp probability between 15% and 85%
+    p1_score = max(15, min(85, p1_score))
+    p2_score = 100 - p1_score
+
+    return {
+        'p1_prob': p1_score,
+        'p2_prob': p2_score,
+        'factors': factors,
+        'favorite': player1 if p1_score > 50 else (player2 if p2_score > 50 else 'Toss-up')
+    }
+
 def format_pct(val):
     """Format percentage for display."""
     return f"{val:.1%}"
@@ -689,7 +968,10 @@ def main():
         st.warning(f"Could not load Cups data: {e}")
 
     # Create tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Player Stats", "🏆 Leaderboard", "🏅 Cups", "🤖 Ask Claude"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "📊 Player Stats", "🏆 Leaderboard", "🏅 Cups",
+        "⚔️ Tale of the Tape", "🎯 Match Predictor", "🤖 Ask Claude"
+    ])
 
     with tab1:
         # Player selection
@@ -967,12 +1249,350 @@ def main():
             st.error("Cups data could not be loaded.")
 
     with tab4:
+        st.markdown("<h3 class='section-header'>⚔️ Tale of the Tape</h3>", unsafe_allow_html=True)
+        st.markdown("Compare any two players head-to-head across all metrics.")
+
+        # Player selection
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"<div style='text-align: center; color: {COLORS['primary']}; font-weight: bold;'>PLAYER 1</div>", unsafe_allow_html=True)
+            tape_player1 = st.selectbox("Select Player 1", options=all_players, index=0, key="tape_p1")
+        with col2:
+            st.markdown(f"<div style='text-align: center; color: {COLORS['loss']}; font-weight: bold;'>PLAYER 2</div>", unsafe_allow_html=True)
+            # Default to a different player
+            default_p2_idx = 1 if len(all_players) > 1 else 0
+            tape_player2 = st.selectbox("Select Player 2", options=all_players, index=default_p2_idx, key="tape_p2")
+
+        if tape_player1 and tape_player2 and tape_player1 != tape_player2:
+            st.markdown("---")
+
+            # Get stats for both players
+            p1_stats = get_player_stats(df, tape_player1)
+            p2_stats = get_player_stats(df, tape_player2)
+
+            if p1_stats and p2_stats:
+                # Overall Records - Side by Side
+                st.markdown("<h4 class='section-header'>Overall Career Records</h4>", unsafe_allow_html=True)
+
+                col1, col2, col3 = st.columns([2, 1, 2])
+
+                with col1:
+                    st.markdown(f"""
+                    <div class="stat-card" style="border-left-color: {COLORS['primary']};">
+                        <div class="stat-value">{p1_stats['record']}</div>
+                        <div class="stat-label">{tape_player1}</div>
+                        <div style="margin-top: 0.5rem;">
+                            <span style="color: {COLORS['primary']};">{p1_stats['win_pct']:.1%} Win</span> |
+                            {p1_stats['points']:.1f} pts | {p1_stats['events']} events
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with col2:
+                    st.markdown("""
+                    <div style="text-align: center; padding: 2rem; font-size: 2rem; font-weight: bold;">
+                        VS
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with col3:
+                    st.markdown(f"""
+                    <div class="stat-card" style="border-left-color: {COLORS['loss']};">
+                        <div class="stat-value">{p2_stats['record']}</div>
+                        <div class="stat-label">{tape_player2}</div>
+                        <div style="margin-top: 0.5rem;">
+                            <span style="color: {COLORS['loss']};">{p2_stats['win_pct']:.1%} Win</span> |
+                            {p2_stats['points']:.1f} pts | {p2_stats['events']} events
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # Direct Head-to-Head
+                st.markdown("<h4 class='section-header'>Direct Head-to-Head</h4>", unsafe_allow_html=True)
+                h2h = get_direct_h2h(df, tape_player1, tape_player2)
+
+                if h2h['matches'] > 0:
+                    col1, col2, col3 = st.columns([2, 1, 2])
+                    with col1:
+                        st.markdown(f"""
+                        <div class="stat-card" style="border-left-color: {COLORS['win'] if h2h['wins'] > h2h['losses'] else COLORS['primary']};">
+                            <div class="stat-value">{h2h['wins']}</div>
+                            <div class="stat-label">Wins vs {tape_player2}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with col2:
+                        st.markdown(f"""
+                        <div style="text-align: center; padding: 1rem;">
+                            <div style="font-size: 1.2rem; color: {COLORS['tie']};">{h2h['ties']} Ties</div>
+                            <div style="font-size: 0.9rem; color: #666;">{h2h['matches']} meetings</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with col3:
+                        st.markdown(f"""
+                        <div class="stat-card" style="border-left-color: {COLORS['win'] if h2h['losses'] > h2h['wins'] else COLORS['loss']};">
+                            <div class="stat-value">{h2h['losses']}</div>
+                            <div class="stat-label">Wins vs {tape_player1}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info(f"{tape_player1} and {tape_player2} have never faced each other directly.")
+
+                # Win % by Format
+                st.markdown("<h4 class='section-header'>Win % by Format</h4>", unsafe_allow_html=True)
+                p1_formats = get_stats_by_format(df, tape_player1)
+                p2_formats = get_stats_by_format(df, tape_player2)
+
+                format_data = []
+                for fmt in ['Singles', 'Doubles', 'FTAS']:
+                    p1_f = p1_formats.get(fmt, {})
+                    p2_f = p2_formats.get(fmt, {})
+                    format_data.append({
+                        'Format': fmt,
+                        f'{tape_player1}': f"{p1_f.get('wins', 0)}-{p1_f.get('losses', 0)}-{p1_f.get('ties', 0)} ({p1_f.get('win_pct', 0):.1%})" if p1_f.get('matches', 0) > 0 else "N/A",
+                        f'{tape_player2}': f"{p2_f.get('wins', 0)}-{p2_f.get('losses', 0)}-{p2_f.get('ties', 0)} ({p2_f.get('win_pct', 0):.1%})" if p2_f.get('matches', 0) > 0 else "N/A",
+                        'Edge': tape_player1 if p1_f.get('win_pct', 0) > p2_f.get('win_pct', 0) else (tape_player2 if p2_f.get('win_pct', 0) > p1_f.get('win_pct', 0) else 'Even')
+                    })
+
+                st.dataframe(pd.DataFrame(format_data), hide_index=True, use_container_width=True)
+
+                # Best/Worst Courses
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown(f"<h4 class='section-header'>{tape_player1}'s Courses</h4>", unsafe_allow_html=True)
+                    p1_best, p1_worst = get_best_worst_courses(df, tape_player1)
+                    if p1_best:
+                        st.markdown("**Best Courses:**")
+                        for c in p1_best:
+                            st.markdown(f"- {c['course']}: {c['wins']}-{c['losses']}-{c['ties']} ({c['win_pct']:.1%})")
+                    if p1_worst and p1_worst != p1_best:
+                        st.markdown("**Worst Courses:**")
+                        for c in p1_worst:
+                            st.markdown(f"- {c['course']}: {c['wins']}-{c['losses']}-{c['ties']} ({c['win_pct']:.1%})")
+
+                with col2:
+                    st.markdown(f"<h4 class='section-header'>{tape_player2}'s Courses</h4>", unsafe_allow_html=True)
+                    p2_best, p2_worst = get_best_worst_courses(df, tape_player2)
+                    if p2_best:
+                        st.markdown("**Best Courses:**")
+                        for c in p2_best:
+                            st.markdown(f"- {c['course']}: {c['wins']}-{c['losses']}-{c['ties']} ({c['win_pct']:.1%})")
+                    if p2_worst and p2_worst != p2_best:
+                        st.markdown("**Worst Courses:**")
+                        for c in p2_worst:
+                            st.markdown(f"- {c['course']}: {c['wins']}-{c['losses']}-{c['ties']} ({c['win_pct']:.1%})")
+
+                # Best Partners
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown(f"<h4 class='section-header'>{tape_player1}'s Best Partners</h4>", unsafe_allow_html=True)
+                    p1_partners = get_best_partners(df, tape_player1)
+                    if p1_partners:
+                        for p in p1_partners:
+                            st.markdown(f"- {p['partner']}: {p['wins']}-{p['losses']}-{p['ties']} ({p['win_pct']:.1%})")
+                    else:
+                        st.info("No doubles partner data.")
+
+                with col2:
+                    st.markdown(f"<h4 class='section-header'>{tape_player2}'s Best Partners</h4>", unsafe_allow_html=True)
+                    p2_partners = get_best_partners(df, tape_player2)
+                    if p2_partners:
+                        for p in p2_partners:
+                            st.markdown(f"- {p['partner']}: {p['wins']}-{p['losses']}-{p['ties']} ({p['win_pct']:.1%})")
+                    else:
+                        st.info("No doubles partner data.")
+
+        elif tape_player1 == tape_player2:
+            st.warning("Please select two different players to compare.")
+
+    with tab5:
+        st.markdown("<h3 class='section-header'>🎯 Match Predictor</h3>", unsafe_allow_html=True)
+        st.markdown("Predict match outcomes based on historical performance data.")
+
+        # Match type selection
+        match_type = st.radio("Match Type", ["Singles", "Doubles"], horizontal=True, key="pred_match_type")
+
+        if match_type == "Singles":
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"<div style='text-align: center; font-weight: bold;'>PLAYER 1</div>", unsafe_allow_html=True)
+                pred_p1 = st.selectbox("Select Player 1", options=all_players, index=0, key="pred_singles_p1")
+            with col2:
+                st.markdown(f"<div style='text-align: center; font-weight: bold;'>PLAYER 2</div>", unsafe_allow_html=True)
+                default_idx = 1 if len(all_players) > 1 else 0
+                pred_p2 = st.selectbox("Select Player 2", options=all_players, index=default_idx, key="pred_singles_p2")
+
+            # Optional course selection
+            all_courses = sorted([c for c in df['Course'].dropna().unique() if isinstance(c, str)])
+            pred_course = st.selectbox("Course (optional)", options=["Any Course"] + all_courses, key="pred_course_singles")
+            pred_course = None if pred_course == "Any Course" else pred_course
+
+            if pred_p1 != pred_p2:
+                if st.button("Predict Match", type="primary", key="predict_singles"):
+                    prediction = predict_match(df, pred_p1, pred_p2, course=pred_course)
+
+                    st.markdown("---")
+                    st.markdown("<h4 class='section-header'>Prediction</h4>", unsafe_allow_html=True)
+
+                    # Visual probability bar
+                    col1, col2, col3 = st.columns([2, 1, 2])
+
+                    with col1:
+                        color1 = COLORS['win'] if prediction['p1_prob'] > 50 else COLORS['primary']
+                        st.markdown(f"""
+                        <div class="stat-card" style="border-left-color: {color1};">
+                            <div class="stat-value" style="color: {color1};">{prediction['p1_prob']:.0f}%</div>
+                            <div class="stat-label">{pred_p1}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    with col2:
+                        st.markdown("""
+                        <div style="text-align: center; padding: 1.5rem;">
+                            <div style="font-size: 1.5rem;">⚡</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    with col3:
+                        color2 = COLORS['win'] if prediction['p2_prob'] > 50 else COLORS['loss']
+                        st.markdown(f"""
+                        <div class="stat-card" style="border-left-color: {color2};">
+                            <div class="stat-value" style="color: {color2};">{prediction['p2_prob']:.0f}%</div>
+                            <div class="stat-label">{pred_p2}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    # Probability bar
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(to right, {COLORS['primary']} {prediction['p1_prob']:.0f}%, {COLORS['loss']} {prediction['p1_prob']:.0f}%);
+                                height: 30px; border-radius: 15px; margin: 1rem 0;">
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    # Factors breakdown
+                    st.markdown("<h4 class='section-header'>Analysis Factors</h4>", unsafe_allow_html=True)
+
+                    if prediction['factors']:
+                        factors_df = pd.DataFrame(prediction['factors'])
+                        factors_df = factors_df.rename(columns={
+                            'factor': 'Factor',
+                            'p1_value': pred_p1,
+                            'p2_value': pred_p2,
+                            'edge': 'Edge',
+                            'impact': 'Impact'
+                        })
+                        st.dataframe(factors_df[['Factor', pred_p1, pred_p2, 'Edge']], hide_index=True, use_container_width=True)
+                    else:
+                        st.info("Not enough historical data to analyze factors.")
+            else:
+                st.warning("Please select two different players.")
+
+        else:  # Doubles
+            st.markdown("**Team 1**")
+            col1, col2 = st.columns(2)
+            with col1:
+                pred_d1_p1 = st.selectbox("Player 1A", options=all_players, index=0, key="pred_d1_p1")
+            with col2:
+                default_idx = 1 if len(all_players) > 1 else 0
+                pred_d1_p2 = st.selectbox("Player 1B", options=all_players, index=default_idx, key="pred_d1_p2")
+
+            st.markdown("**Team 2**")
+            col1, col2 = st.columns(2)
+            with col1:
+                default_idx = 2 if len(all_players) > 2 else 0
+                pred_d2_p1 = st.selectbox("Player 2A", options=all_players, index=default_idx, key="pred_d2_p1")
+            with col2:
+                default_idx = 3 if len(all_players) > 3 else 0
+                pred_d2_p2 = st.selectbox("Player 2B", options=all_players, index=default_idx, key="pred_d2_p2")
+
+            # Optional course selection
+            all_courses = sorted([c for c in df['Course'].dropna().unique() if isinstance(c, str)])
+            pred_course_d = st.selectbox("Course (optional)", options=["Any Course"] + all_courses, key="pred_course_doubles")
+            pred_course_d = None if pred_course_d == "Any Course" else pred_course_d
+
+            # Validate no duplicate players
+            team1 = {pred_d1_p1, pred_d1_p2}
+            team2 = {pred_d2_p1, pred_d2_p2}
+
+            if len(team1) == 2 and len(team2) == 2 and not team1.intersection(team2):
+                if st.button("Predict Match", type="primary", key="predict_doubles"):
+                    # For doubles, we combine factors from both team members
+                    prediction = predict_match(df, pred_d1_p1, pred_d2_p1, course=pred_course_d,
+                                              is_doubles=True, partner1=pred_d1_p2, partner2=pred_d2_p2)
+
+                    st.markdown("---")
+                    st.markdown("<h4 class='section-header'>Prediction</h4>", unsafe_allow_html=True)
+
+                    col1, col2, col3 = st.columns([2, 1, 2])
+
+                    with col1:
+                        color1 = COLORS['win'] if prediction['p1_prob'] > 50 else COLORS['primary']
+                        st.markdown(f"""
+                        <div class="stat-card" style="border-left-color: {color1};">
+                            <div class="stat-value" style="color: {color1};">{prediction['p1_prob']:.0f}%</div>
+                            <div class="stat-label">{pred_d1_p1} / {pred_d1_p2}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    with col2:
+                        st.markdown("""
+                        <div style="text-align: center; padding: 1.5rem;">
+                            <div style="font-size: 1.5rem;">⚡</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    with col3:
+                        color2 = COLORS['win'] if prediction['p2_prob'] > 50 else COLORS['loss']
+                        st.markdown(f"""
+                        <div class="stat-card" style="border-left-color: {color2};">
+                            <div class="stat-value" style="color: {color2};">{prediction['p2_prob']:.0f}%</div>
+                            <div class="stat-label">{pred_d2_p1} / {pred_d2_p2}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    # Probability bar
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(to right, {COLORS['primary']} {prediction['p1_prob']:.0f}%, {COLORS['loss']} {prediction['p1_prob']:.0f}%);
+                                height: 30px; border-radius: 15px; margin: 1rem 0;">
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    # Factors breakdown
+                    st.markdown("<h4 class='section-header'>Analysis Factors</h4>", unsafe_allow_html=True)
+
+                    if prediction['factors']:
+                        factors_df = pd.DataFrame(prediction['factors'])
+                        factors_df = factors_df.rename(columns={
+                            'factor': 'Factor',
+                            'p1_value': f"{pred_d1_p1}/{pred_d1_p2}",
+                            'p2_value': f"{pred_d2_p1}/{pred_d2_p2}",
+                            'edge': 'Edge',
+                            'impact': 'Impact'
+                        })
+                        st.dataframe(factors_df[['Factor', f"{pred_d1_p1}/{pred_d1_p2}", f"{pred_d2_p1}/{pred_d2_p2}", 'Edge']], hide_index=True, use_container_width=True)
+                    else:
+                        st.info("Not enough historical data to analyze factors.")
+            else:
+                st.warning("Please select 4 different players (no player can be on both teams or appear twice).")
+
+    with tab6:
         st.markdown("<h3 class='section-header'>Ask Claude About FBC Data</h3>", unsafe_allow_html=True)
 
         st.markdown("""
         Ask any question about FBC tournament data - player stats, head-to-head records,
         course performance, historical trends, and more!
         """)
+
+        # Initialize session state
+        if 'claude_question' not in st.session_state:
+            st.session_state.claude_question = ""
+        if 'submit_question' not in st.session_state:
+            st.session_state.submit_question = False
+        if 'claude_response' not in st.session_state:
+            st.session_state.claude_response = None
+        if 'last_question' not in st.session_state:
+            st.session_state.last_question = ""
 
         # Example questions
         st.markdown("**Try these example questions:**")
@@ -992,12 +1612,10 @@ def main():
             with cols[i % 2]:
                 if st.button(question, key=f"example_{i}", use_container_width=True):
                     st.session_state.claude_question = question
+                    st.session_state.submit_question = True
+                    st.rerun()
 
         st.markdown("---")
-
-        # Initialize session state for the question if not exists
-        if 'claude_question' not in st.session_state:
-            st.session_state.claude_question = ""
 
         # Text input for custom questions
         user_question = st.text_input(
@@ -1007,38 +1625,55 @@ def main():
             key="question_input"
         )
 
-        # Update session state when text input changes
+        # Sync text input back to session state
         if user_question != st.session_state.claude_question:
             st.session_state.claude_question = user_question
 
         # Submit button
-        if st.button("Ask Claude", type="primary", use_container_width=True):
-            if user_question.strip():
-                # Check if API key is configured
-                if "ANTHROPIC_API_KEY" not in st.secrets:
-                    st.error("Anthropic API key not configured. Please add ANTHROPIC_API_KEY to your Streamlit secrets.")
-                else:
-                    with st.spinner("Claude is analyzing the FBC data..."):
-                        try:
-                            # Get response from Claude (data filtering happens inside)
-                            response = ask_claude(user_question, df, cups_df)
+        submit_clicked = st.button("Ask Claude", type="primary", use_container_width=True)
 
-                            # Display response
-                            st.markdown("---")
-                            st.markdown("**Claude's Answer:**")
-                            st.markdown(f"""
-                            <div style="background: white; padding: 1.5rem; border-radius: 10px;
-                                        border-left: 4px solid {COLORS['primary']}; margin-top: 1rem;">
-                                {response}
-                            </div>
-                            """, unsafe_allow_html=True)
+        # Determine if we should submit (either button clicked or auto-submit from example)
+        should_submit = submit_clicked or st.session_state.submit_question
 
-                        except anthropic.AuthenticationError:
-                            st.error("Invalid API key. Please check your ANTHROPIC_API_KEY in Streamlit secrets.")
-                        except Exception as e:
-                            st.error(f"Error getting response from Claude: {str(e)}")
+        # Reset the auto-submit flag
+        if st.session_state.submit_question:
+            st.session_state.submit_question = False
+
+        # Get the question to use
+        question_to_ask = st.session_state.claude_question
+
+        if should_submit and question_to_ask.strip():
+            # Check if API key is configured
+            if "ANTHROPIC_API_KEY" not in st.secrets:
+                st.error("Anthropic API key not configured. Please add ANTHROPIC_API_KEY to your Streamlit secrets.")
             else:
-                st.warning("Please enter a question.")
+                with st.spinner("Claude is analyzing the FBC data..."):
+                    try:
+                        # Get response from Claude (data filtering happens inside)
+                        response = ask_claude(question_to_ask, df, cups_df)
+                        st.session_state.claude_response = response
+                        st.session_state.last_question = question_to_ask
+
+                    except anthropic.AuthenticationError:
+                        st.error("Invalid API key. Please check your ANTHROPIC_API_KEY in Streamlit secrets.")
+                        st.session_state.claude_response = None
+                    except Exception as e:
+                        st.error(f"Error getting response from Claude: {str(e)}")
+                        st.session_state.claude_response = None
+        elif should_submit:
+            st.warning("Please enter a question.")
+
+        # Display the response (persists across reruns)
+        if st.session_state.claude_response and st.session_state.last_question:
+            st.markdown("---")
+            st.markdown(f"**Question:** {st.session_state.last_question}")
+            st.markdown("**Claude's Answer:**")
+            st.markdown(f"""
+            <div style="background: white; padding: 1.5rem; border-radius: 10px;
+                        border-left: 4px solid {COLORS['primary']}; margin-top: 1rem;">
+                {st.session_state.claude_response}
+            </div>
+            """, unsafe_allow_html=True)
 
         # Info about API key setup
         with st.expander("How to set up your API key"):
