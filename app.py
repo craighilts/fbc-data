@@ -527,6 +527,54 @@ def calculate_player_stats_for_subset(df, players=None):
 
     return sorted(stats, key=lambda x: x['Points'], reverse=True)
 
+def get_all_individual_fbc_performances(df):
+    """Calculate per-player, per-FBC event performance stats.
+
+    Returns a list of dicts with each player's performance at each FBC event,
+    sorted by points (best performances first).
+    """
+    all_players = set(df['Player 1'].dropna().unique()) | set(df[df['Player 2'].notna()]['Player 2'].unique())
+    all_players = [p for p in all_players if isinstance(p, str)]
+    all_events = sorted([int(e) for e in df['FBC'].dropna().unique() if pd.notna(e)])
+
+    performances = []
+
+    for player in all_players:
+        player_matches = df[(df['Player 1'] == player) | (df['Player 2'] == player)]
+
+        for fbc in all_events:
+            event_matches = player_matches[player_matches['FBC'] == fbc]
+            if len(event_matches) == 0:
+                continue
+
+            wins = int(event_matches['W'].sum())
+            losses = int(event_matches['L'].sum())
+            ties = int(event_matches['T'].sum())
+            points = event_matches['Points earned'].sum()
+            matches = len(event_matches)
+            location = event_matches['Geographic Location'].iloc[0] if pd.notna(event_matches['Geographic Location'].iloc[0]) else "Unknown"
+
+            win_pct = (wins + 0.5 * ties) / matches if matches > 0 else 0
+
+            # Calculate points per match for comparison
+            ppm = points / matches if matches > 0 else 0
+
+            performances.append({
+                'Player': player,
+                'FBC': int(fbc),
+                'Location': location,
+                'Points': points,
+                'Wins': wins,
+                'Losses': losses,
+                'Ties': ties,
+                'Matches': matches,
+                'Record': f"{wins}-{losses}-{ties}",
+                'Win%': win_pct,
+                'PPM': ppm  # Points per match
+            })
+
+    return performances
+
 def prepare_data_context(df, question, cups_df=None):
     """Prepare relevant FBC data context based on the question."""
     # Get all players and courses for reference
@@ -550,6 +598,17 @@ def prepare_data_context(df, question, cups_df=None):
         'best partners', 'best pair', 'best pairing', 'as partners', 'together',
         'paired with', 'teamed with', 'partner with', 'duo', 'tandem'
     ]) or ('and' in question_lower and any(word in question_lower for word in ['record', 'wins', 'partner']))
+
+    # Check if question is about individual FBC performance (per-player, per-event)
+    is_performance_question = any(phrase in question_lower for phrase in [
+        'best fbc', 'worst fbc', 'best performance', 'worst performance', 'best cup',
+        'worst cup', 'single fbc', 'single cup', 'single event', 'one fbc', 'one cup',
+        'individual performance', 'cup performance', 'fbc performance', 'event performance',
+        'top performance', 'top 10', 'top ten', 'best ever', 'worst ever', 'all time best',
+        'all time worst', 'most points in a', 'most points at', 'highest points',
+        'rank all', 'rank his', 'rank her', 'from best to worst', 'from worst to best',
+        'performances from', 'best single', 'worst single'
+    ])
 
     # Extract entities from the question
     fbc_num = extract_fbc_number(question)
@@ -698,6 +757,46 @@ def prepare_data_context(df, question, cups_df=None):
     for i, pstat in enumerate(partnership_stats[:25], 1):
         context_parts.append(f"    {i}. {pstat['Partnership']}: {pstat['Wins']} wins, {pstat['Record']}, {pstat['Win%']:.1%}, {pstat['Matches']} matches, {pstat['Events']} events")
 
+    # INDIVIDUAL FBC PERFORMANCE LEADERBOARD (per-player, per-event)
+    all_performances = get_all_individual_fbc_performances(df)
+
+    # Sort by points for best single FBC performances
+    best_by_points = sorted(all_performances, key=lambda x: (-x['Points'], -x['Win%']))
+    context_parts.append(f"\n  BEST INDIVIDUAL FBC PERFORMANCES - BY POINTS (Top 30):")
+    context_parts.append(f"  (Each player's performance at each FBC event they attended)")
+    for i, perf in enumerate(best_by_points[:30], 1):
+        context_parts.append(f"    {i}. {perf['Player']} at FBC {perf['FBC']} ({perf['Location']}): {perf['Points']:.1f} pts, {perf['Record']}, {perf['Win%']:.1%}, {perf['Matches']} matches")
+
+    # Sort by win percentage (min 3 matches) for best win rate performances
+    qualified_perfs = [p for p in all_performances if p['Matches'] >= 3]
+    best_by_winpct = sorted(qualified_perfs, key=lambda x: (-x['Win%'], -x['Points']))
+    context_parts.append(f"\n  BEST INDIVIDUAL FBC PERFORMANCES - BY WIN% (min 3 matches, Top 25):")
+    for i, perf in enumerate(best_by_winpct[:25], 1):
+        context_parts.append(f"    {i}. {perf['Player']} at FBC {perf['FBC']} ({perf['Location']}): {perf['Win%']:.1%}, {perf['Record']}, {perf['Points']:.1f} pts, {perf['Matches']} matches")
+
+    # Worst performances (by points, then win%)
+    worst_by_points = sorted([p for p in all_performances if p['Matches'] >= 3], key=lambda x: (x['Points'], x['Win%']))
+    context_parts.append(f"\n  WORST INDIVIDUAL FBC PERFORMANCES (min 3 matches, Bottom 20):")
+    for i, perf in enumerate(worst_by_points[:20], 1):
+        context_parts.append(f"    {i}. {perf['Player']} at FBC {perf['FBC']} ({perf['Location']}): {perf['Points']:.1f} pts, {perf['Record']}, {perf['Win%']:.1%}, {perf['Matches']} matches")
+
+    # If specific players mentioned, show ALL their FBC performances
+    if mentioned_players:
+        for player in mentioned_players:
+            player_perfs = [p for p in all_performances if p['Player'] == player]
+            if player_perfs:
+                # Sort by points (best first)
+                player_perfs_by_pts = sorted(player_perfs, key=lambda x: (-x['Points'], -x['Win%']))
+                context_parts.append(f"\n  {player.upper()}'S FBC PERFORMANCES RANKED (Best to Worst by Points):")
+                for i, perf in enumerate(player_perfs_by_pts, 1):
+                    context_parts.append(f"    {i}. FBC {perf['FBC']} ({perf['Location']}): {perf['Points']:.1f} pts, {perf['Record']}, {perf['Win%']:.1%}, {perf['Matches']} matches")
+
+    # If asking about individual FBC performances, add emphasis
+    if is_performance_question:
+        context_parts.append(f"\n  *** IMPORTANT: The question asks about INDIVIDUAL FBC PERFORMANCES. ***")
+        context_parts.append(f"  *** Use the BEST/WORST INDIVIDUAL FBC PERFORMANCES leaderboards above. ***")
+        context_parts.append(f"  *** Each entry represents one player's stats at one specific FBC event. ***")
+
     # If specific players are mentioned, check if they've been partners
     if len(mentioned_players) >= 2:
         context_parts.append(f"\n  SPECIFIC PARTNERSHIP RECORDS FOR MENTIONED PLAYERS:")
@@ -795,6 +894,14 @@ DOUBLES PARTNERSHIPS:
 - Use this leaderboard when asked about "best doubles team", "partnership records", "who has won the most as partners", etc.
 - A partnership is identified by two player names (e.g., "Hilts & Lynch") and shows their combined record when playing as teammates
 - Note: Individual doubles stats (DOUBLES ONLY LEADERBOARD) are DIFFERENT from partnership stats - individual stats count each player separately, while partnership stats count the team's record together
+
+INDIVIDUAL FBC PERFORMANCES (Per-Player, Per-Event):
+- The BEST/WORST INDIVIDUAL FBC PERFORMANCES leaderboards show each player's performance at each specific FBC event
+- Each entry represents ONE player at ONE FBC tournament (e.g., "Grise at FBC 7")
+- Use these when asked about "best single FBC performance", "top 10 individual Cup performances", "who had the best FBC ever"
+- Also use when asked about a specific player's best/worst FBC or to rank all their FBC performances
+- Data includes: points earned, win-loss-tie record, win percentage, and number of matches at that event
+- When a player is mentioned, their individual FBC performances are listed from best to worst
 
 For CUP questions: A "cup win" means the player was on the winning TEAM for that FBC event. This is different
 from individual match wins. The Cups data shows team championship results.
