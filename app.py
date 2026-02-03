@@ -257,6 +257,97 @@ def get_partner_performance(df, player):
 
     return partner_stats[['Partner', 'Record', 'Win%', 'Points', 'Matches']].sort_values('Matches', ascending=False)
 
+def get_all_partnership_stats(df):
+    """Calculate statistics for all doubles partnerships.
+
+    Returns a list of partnership records sorted by wins (descending).
+    Each partnership is identified by the two player names (in alphabetical order).
+    """
+    doubles_matches = df[df['Singes/Doubles'] == 'Doubles'].copy()
+
+    if len(doubles_matches) == 0:
+        return []
+
+    # Create a canonical partnership key (alphabetically sorted names)
+    doubles_matches['Partnership'] = doubles_matches.apply(
+        lambda row: tuple(sorted([row['Player 1'], row['Player 2']]))
+        if pd.notna(row['Player 1']) and pd.notna(row['Player 2']) else None,
+        axis=1
+    )
+
+    # Remove rows without valid partnerships
+    doubles_matches = doubles_matches[doubles_matches['Partnership'].notna()]
+
+    # Group by partnership and calculate stats
+    partnership_stats = doubles_matches.groupby('Partnership').agg({
+        'W': 'sum',
+        'L': 'sum',
+        'T': 'sum',
+        'Points earned': 'sum',
+        'FBC': 'nunique'  # Number of events played together
+    }).reset_index()
+
+    partnership_stats['Matches'] = partnership_stats['W'] + partnership_stats['L'] + partnership_stats['T']
+    partnership_stats['Win%'] = (partnership_stats['W'] + 0.5 * partnership_stats['T']) / partnership_stats['Matches']
+    partnership_stats['Record'] = partnership_stats.apply(
+        lambda x: f"{int(x['W'])}-{int(x['L'])}-{int(x['T'])}", axis=1
+    )
+
+    # Convert to list of dicts for easier handling
+    results = []
+    for _, row in partnership_stats.iterrows():
+        p1, p2 = row['Partnership']
+        results.append({
+            'Partner1': p1,
+            'Partner2': p2,
+            'Partnership': f"{p1} & {p2}",
+            'Wins': int(row['W']),
+            'Losses': int(row['L']),
+            'Ties': int(row['T']),
+            'Record': row['Record'],
+            'Win%': row['Win%'],
+            'Matches': int(row['Matches']),
+            'Points': row['Points earned'],
+            'Events': int(row['FBC'])
+        })
+
+    # Sort by wins (descending), then by win% (descending)
+    return sorted(results, key=lambda x: (x['Wins'], x['Win%']), reverse=True)
+
+def get_specific_partnership_stats(df, player1, player2):
+    """Get the record for a specific doubles partnership."""
+    doubles_matches = df[df['Singes/Doubles'] == 'Doubles'].copy()
+
+    # Find matches where both players were partners (in either order)
+    partnership_matches = doubles_matches[
+        ((doubles_matches['Player 1'] == player1) & (doubles_matches['Player 2'] == player2)) |
+        ((doubles_matches['Player 1'] == player2) & (doubles_matches['Player 2'] == player1))
+    ]
+
+    if len(partnership_matches) == 0:
+        return None
+
+    wins = int(partnership_matches['W'].sum())
+    losses = int(partnership_matches['L'].sum())
+    ties = int(partnership_matches['T'].sum())
+    points = partnership_matches['Points earned'].sum()
+    matches = len(partnership_matches)
+    events = partnership_matches['FBC'].nunique()
+
+    return {
+        'Partner1': player1,
+        'Partner2': player2,
+        'Partnership': f"{player1} & {player2}",
+        'Wins': wins,
+        'Losses': losses,
+        'Ties': ties,
+        'Record': f"{wins}-{losses}-{ties}",
+        'Win%': (wins + 0.5 * ties) / matches if matches > 0 else 0,
+        'Matches': matches,
+        'Points': points,
+        'Events': events
+    }
+
 def get_head_to_head(df, player):
     """Get player's head-to-head record against all opponents."""
     player_matches = df[(df['Player 1'] == player) | (df['Player 2'] == player)].copy()
@@ -449,6 +540,17 @@ def prepare_data_context(df, question, cups_df=None):
     question_lower = question.lower()
     is_cups_question = any(word in question_lower for word in ['cup', 'cups', 'champion', 'championship', 'won', 'winning team', 'title'])
 
+    # Check if question is specifically about singles or doubles
+    is_singles_question = any(word in question_lower for word in ['singles', 'single', 'one on one', '1v1', 'individual'])
+    is_doubles_question = any(word in question_lower for word in ['doubles', 'double', 'partner', 'partners', 'team', 'teams', 'pairing'])
+
+    # Check if question is about partnerships/doubles teams
+    is_partnership_question = any(phrase in question_lower for phrase in [
+        'partnership', 'partnerships', 'doubles team', 'doubles teams', 'best team',
+        'best partners', 'best pair', 'best pairing', 'as partners', 'together',
+        'paired with', 'teamed with', 'partner with', 'duo', 'tandem'
+    ]) or ('and' in question_lower and any(word in question_lower for word in ['record', 'wins', 'partner']))
+
     # Extract entities from the question
     fbc_num = extract_fbc_number(question)
     mentioned_players = extract_player_names(question, all_players)
@@ -567,10 +669,60 @@ def prepare_data_context(df, question, cups_df=None):
     context_parts.append(f"  Players: {', '.join(all_players)}")
 
     # Overall leaderboard
-    context_parts.append(f"\n  LIFETIME LEADERBOARD (Top 20):")
+    context_parts.append(f"\n  LIFETIME LEADERBOARD - ALL MATCHES (Top 20):")
     overall_stats = calculate_player_stats_for_subset(df)
     for i, stat in enumerate(overall_stats[:20], 1):
         context_parts.append(f"    {i}. {stat['Player']}: {stat['Points']:.1f} pts, {stat['Record']}, {stat['Win%']:.1%}")
+
+    # SINGLES LEADERBOARD - Filter by 'Singes/Doubles' column (note: typo in column name is 'Singes')
+    # This column contains 'Singles', 'Doubles', or 'FTAS'
+    singles_df = df[df['Singes/Doubles'] == 'Singles']
+    context_parts.append(f"\n  SINGLES ONLY LEADERBOARD (Top 20):")
+    context_parts.append(f"  (These stats are ONLY from singles matches - {len(singles_df)} total singles matches)")
+    singles_stats = calculate_player_stats_for_subset(singles_df)
+    for i, stat in enumerate(singles_stats[:20], 1):
+        context_parts.append(f"    {i}. {stat['Player']}: {stat['Wins']} wins, {stat['Record']}, {stat['Win%']:.1%}, {stat['Points']:.1f} pts")
+
+    # DOUBLES LEADERBOARD
+    doubles_df = df[df['Singes/Doubles'] == 'Doubles']
+    context_parts.append(f"\n  DOUBLES ONLY LEADERBOARD (Top 20):")
+    context_parts.append(f"  (These stats are ONLY from doubles matches - {len(doubles_df)} total doubles matches)")
+    doubles_stats = calculate_player_stats_for_subset(doubles_df)
+    for i, stat in enumerate(doubles_stats[:20], 1):
+        context_parts.append(f"    {i}. {stat['Player']}: {stat['Wins']} wins, {stat['Record']}, {stat['Win%']:.1%}, {stat['Points']:.1f} pts")
+
+    # DOUBLES PARTNERSHIP LEADERBOARD
+    context_parts.append(f"\n  DOUBLES PARTNERSHIP LEADERBOARD (Top 25):")
+    context_parts.append(f"  (Stats for each unique pair of players who played doubles together)")
+    partnership_stats = get_all_partnership_stats(df)
+    for i, pstat in enumerate(partnership_stats[:25], 1):
+        context_parts.append(f"    {i}. {pstat['Partnership']}: {pstat['Wins']} wins, {pstat['Record']}, {pstat['Win%']:.1%}, {pstat['Matches']} matches, {pstat['Events']} events")
+
+    # If specific players are mentioned, check if they've been partners
+    if len(mentioned_players) >= 2:
+        context_parts.append(f"\n  SPECIFIC PARTNERSHIP RECORDS FOR MENTIONED PLAYERS:")
+        # Check all pairs of mentioned players
+        for i in range(len(mentioned_players)):
+            for j in range(i + 1, len(mentioned_players)):
+                p1, p2 = mentioned_players[i], mentioned_players[j]
+                pstats = get_specific_partnership_stats(df, p1, p2)
+                if pstats:
+                    context_parts.append(f"    {pstats['Partnership']}: {pstats['Wins']} wins, {pstats['Record']}, {pstats['Win%']:.1%}, {pstats['Matches']} matches together")
+                else:
+                    context_parts.append(f"    {p1} & {p2}: Never partnered in doubles")
+
+    # If asking about partnerships, add emphasis
+    if is_partnership_question:
+        context_parts.append(f"\n  *** IMPORTANT: The question asks about DOUBLES PARTNERSHIPS. Use the DOUBLES PARTNERSHIP LEADERBOARD above. ***")
+        context_parts.append(f"  *** A partnership is two players who played together as a team in doubles matches. ***")
+
+    # If specifically asking about singles or doubles, add extra emphasis
+    if is_singles_question:
+        context_parts.append(f"\n  *** IMPORTANT: The question asks about SINGLES matches. Use the SINGLES ONLY LEADERBOARD above. ***")
+        context_parts.append(f"  *** Singles matches are where 'Singes/Doubles' column equals 'Singles' ***")
+    if is_doubles_question:
+        context_parts.append(f"\n  *** IMPORTANT: The question asks about DOUBLES matches. Use the DOUBLES ONLY LEADERBOARD above. ***")
+        context_parts.append(f"  *** Doubles matches are where 'Singes/Doubles' column equals 'Doubles' ***")
 
     # Add Cups data if available and relevant
     if cups_df is not None and (is_cups_question or mentioned_players):
@@ -630,6 +782,19 @@ course performance, tournament history, and CUP CHAMPIONSHIPS (which team won ea
 IMPORTANT: The data provided includes pre-calculated statistics and complete match records. Use these directly -
 do not try to recalculate from raw data. When asked about points, wins, or records, cite the exact numbers from
 the leaderboard or stats provided.
+
+CRITICAL - SINGLES vs DOUBLES DISTINCTION:
+- The data includes THREE separate leaderboards: ALL MATCHES, SINGLES ONLY, and DOUBLES ONLY
+- When asked about "singles wins", "singles record", or "singles performance", ONLY use the SINGLES ONLY LEADERBOARD
+- When asked about "doubles wins", "doubles record", or "doubles performance", ONLY use the DOUBLES ONLY LEADERBOARD
+- When asked about overall/total stats without specifying match type, use the ALL MATCHES leaderboard
+- FTAS (Four-ball Team Alternate Shot) is a separate format - not singles or doubles
+
+DOUBLES PARTNERSHIPS:
+- The DOUBLES PARTNERSHIP LEADERBOARD shows statistics for each unique pair of players who have played doubles together
+- Use this leaderboard when asked about "best doubles team", "partnership records", "who has won the most as partners", etc.
+- A partnership is identified by two player names (e.g., "Hilts & Lynch") and shows their combined record when playing as teammates
+- Note: Individual doubles stats (DOUBLES ONLY LEADERBOARD) are DIFFERENT from partnership stats - individual stats count each player separately, while partnership stats count the team's record together
 
 For CUP questions: A "cup win" means the player was on the winning TEAM for that FBC event. This is different
 from individual match wins. The Cups data shows team championship results.
@@ -1601,11 +1766,11 @@ def main():
 
         example_questions = [
             "Who has won the most cups?",
-            "Who has the best record against Connolly?",
-            "What's Hilts' win percentage at Pebble Beach?",
-            "Who is the best doubles partner for Hilts?",
+            "Which doubles partnership has the most wins?",
+            "What's Hilts and Lynch's record as partners?",
+            "Who has the most singles wins?",
             "Who had the most points at FBC 11?",
-            "How many cups has Lynch won?"
+            "Who are the best doubles teams in FBC history?"
         ]
 
         # Create columns for example question buttons
