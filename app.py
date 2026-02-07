@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import re
 import anthropic
 
 # Page config
@@ -558,12 +559,69 @@ def extract_fbc_number(question):
     return None
 
 def extract_player_names(question, all_players):
-    """Extract player names mentioned in a question."""
+    """Extract player names mentioned in a question.
+
+    Special handling for the two Connollys in the data:
+      - 'Connolly' = Brett Connolly (the more common one)
+      - 'R. Connolly' = Rick Connolly
+    When the user says just 'Connolly', we assume Brett unless Rick is indicated.
+    """
     question_lower = question.lower()
     mentioned = []
+
+    # Connolly disambiguation constants
+    connolly_brett = 'Connolly'
+    connolly_rick = 'R. Connolly'
+    has_both_connollys = connolly_brett in all_players and connolly_rick in all_players
+
+    rick_mentioned = False
+    brett_mentioned = False
+    bare_connolly = False
+
+    if has_both_connollys:
+        # Detect Rick Connolly references (word-boundary matching to avoid e.g. "trick")
+        rick_mentioned = bool(re.search(r'\brick\b', question_lower)) or \
+                         bool(re.search(r'\br\.?\s*connolly', question_lower)) or \
+                         bool(re.search(r'connolly,?\s*r\b', question_lower))
+
+        # Detect Brett Connolly references
+        brett_mentioned = bool(re.search(r'\bbrett\b', question_lower))
+
+        # Detect "both Connollys" references
+        both_connollys = bool(re.search(r'\bconnollys\b', question_lower)) or \
+                         bool(re.search(r'\bboth\s+connolly', question_lower))
+
+        # Check if "connolly" appears standalone (not just as part of a Rick-style reference).
+        # Remove Rick-style references to see if a bare "connolly" remains.
+        cleaned = re.sub(r'\brick\s+connolly\b', '', question_lower)
+        cleaned = re.sub(r'\br\.?\s*connolly\b', '', cleaned)
+        cleaned = re.sub(r'\bconnolly,?\s*r\b', '', cleaned)
+        bare_connolly = 'connolly' in cleaned
+
     for player in all_players:
         if player.lower() in question_lower:
+            # Special handling for Connolly disambiguation
+            if has_both_connollys and player == connolly_brett:
+                if both_connollys:
+                    pass  # Keep Brett
+                elif rick_mentioned and not brett_mentioned and not bare_connolly:
+                    # "connolly" substring matched but user only means Rick — skip Brett
+                    continue
             mentioned.append(player)
+
+    # Add players referenced by first name only (won't match via substring)
+    if has_both_connollys:
+        if both_connollys:
+            if connolly_brett not in mentioned:
+                mentioned.append(connolly_brett)
+            if connolly_rick not in mentioned:
+                mentioned.append(connolly_rick)
+        else:
+            if rick_mentioned and connolly_rick not in mentioned:
+                mentioned.append(connolly_rick)
+            if brett_mentioned and connolly_brett not in mentioned:
+                mentioned.append(connolly_brett)
+
     return mentioned
 
 def extract_course_names(question, all_courses):
@@ -1028,6 +1086,14 @@ INDIVIDUAL FBC PERFORMANCES (Per-Player, Per-Event):
 - Also use when asked about a specific player's best/worst FBC or to rank all their FBC performances
 - Data includes: points earned, win-loss-tie record, win percentage, and number of matches at that event
 - When a player is mentioned, their individual FBC performances are listed from best to worst
+
+PLAYER NAME DISAMBIGUATION - TWO CONNOLLYS:
+- "Connolly" in the data refers to BRETT Connolly
+- "R. Connolly" in the data refers to RICK Connolly
+- If the user asks about "Brett Connolly", "Brett", or just "Connolly" without further context, use the "Connolly" data (Brett)
+- If the user asks about "Rick Connolly", "Rick", "Connolly R", or "R. Connolly", use the "R. Connolly" data (Rick)
+- When presenting stats for either Connolly, always clarify which one you mean (e.g., "Connolly (Brett)" or "R. Connolly (Rick)")
+- If both Connollys appear in a leaderboard or result set, label them clearly so the user can tell them apart
 
 For CUP questions: A "cup win" means the player was on the winning TEAM for that FBC event. This is different
 from individual match wins. The Cups data shows team championship results.
