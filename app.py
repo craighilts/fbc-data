@@ -263,7 +263,9 @@ def get_all_partnership_stats(df):
     Returns a list of partnership records sorted by wins (descending).
     Each partnership is identified by the two player names (in alphabetical order).
     """
-    doubles_matches = df[df['Singes/Doubles'] == 'Doubles'].copy()
+    # Handle both column names (typo in some versions)
+    match_type_col = 'Singles/Doubles' if 'Singles/Doubles' in df.columns else 'Singes/Doubles'
+    doubles_matches = df[df[match_type_col] == 'Doubles'].copy()
 
     if len(doubles_matches) == 0:
         return []
@@ -316,7 +318,9 @@ def get_all_partnership_stats(df):
 
 def get_specific_partnership_stats(df, player1, player2):
     """Get the record for a specific doubles partnership."""
-    doubles_matches = df[df['Singes/Doubles'] == 'Doubles'].copy()
+    # Handle both column names (typo in some versions)
+    match_type_col = 'Singles/Doubles' if 'Singles/Doubles' in df.columns else 'Singes/Doubles'
+    doubles_matches = df[df[match_type_col] == 'Doubles'].copy()
 
     # Find matches where both players were partners (in either order)
     partnership_matches = doubles_matches[
@@ -347,6 +351,89 @@ def get_specific_partnership_stats(df, player1, player2):
         'Points': points,
         'Events': events
     }
+
+def get_aggregate_group_doubles_stats(df, player_group):
+    """Calculate aggregate doubles stats where BOTH partners are in the specified group.
+
+    Args:
+        df: DataFrame with match data
+        player_group: List of player names to consider as a group
+
+    Returns:
+        Dictionary with aggregate stats, individual partnership breakdowns, and excluded matches info
+    """
+    # Try both column names (handle typo in some data versions)
+    match_type_col = 'Singles/Doubles' if 'Singles/Doubles' in df.columns else 'Singes/Doubles'
+    doubles_matches = df[df[match_type_col] == 'Doubles'].copy()
+
+    if len(doubles_matches) == 0 or len(player_group) < 2:
+        return None
+
+    # Normalize player group to lowercase for matching
+    player_group_lower = [p.lower() for p in player_group]
+
+    # Find matches where BOTH Player 1 AND Player 2 are in the group
+    qualifying_matches = doubles_matches[
+        (doubles_matches['Player 1'].str.lower().isin(player_group_lower)) &
+        (doubles_matches['Player 2'].str.lower().isin(player_group_lower))
+    ]
+
+    # Also track matches where only ONE partner is in the group (for transparency)
+    one_in_group = doubles_matches[
+        ((doubles_matches['Player 1'].str.lower().isin(player_group_lower)) &
+         (~doubles_matches['Player 2'].str.lower().isin(player_group_lower))) |
+        ((~doubles_matches['Player 1'].str.lower().isin(player_group_lower)) &
+         (doubles_matches['Player 2'].str.lower().isin(player_group_lower)))
+    ]
+
+    if len(qualifying_matches) == 0:
+        return {
+            'group': player_group,
+            'total_wins': 0,
+            'total_losses': 0,
+            'total_ties': 0,
+            'total_matches': 0,
+            'record': '0-0-0',
+            'win_pct': 0.0,
+            'total_points': 0.0,
+            'partnerships': [],
+            'excluded_matches': len(one_in_group),
+            'excluded_note': f"Excluded {len(one_in_group)} matches where only one partner was in the group"
+        }
+
+    # Calculate aggregate totals
+    total_wins = int(qualifying_matches['W'].sum())
+    total_losses = int(qualifying_matches['L'].sum())
+    total_ties = int(qualifying_matches['T'].sum())
+    total_matches = len(qualifying_matches)
+    total_points = qualifying_matches['Points earned'].sum()
+    win_pct = (total_wins + 0.5 * total_ties) / total_matches if total_matches > 0 else 0
+
+    # Get breakdown by individual partnerships within the group
+    partnerships = []
+    player_group_normalized = sorted([p for p in player_group])
+
+    for i in range(len(player_group_normalized)):
+        for j in range(i + 1, len(player_group_normalized)):
+            p1, p2 = player_group_normalized[i], player_group_normalized[j]
+            pstats = get_specific_partnership_stats(df, p1, p2)
+            if pstats and pstats['Matches'] > 0:
+                partnerships.append(pstats)
+
+    return {
+        'group': player_group,
+        'total_wins': total_wins,
+        'total_losses': total_losses,
+        'total_ties': total_ties,
+        'total_matches': total_matches,
+        'record': f"{total_wins}-{total_losses}-{total_ties}",
+        'win_pct': win_pct,
+        'total_points': total_points,
+        'partnerships': partnerships,
+        'excluded_matches': len(one_in_group),
+        'excluded_note': f"Excluded {len(one_in_group)} matches where only one partner was in the group"
+    }
+
 
 def get_head_to_head(df, player):
     """Get player's head-to-head record against all opponents."""
@@ -599,6 +686,14 @@ def prepare_data_context(df, question, cups_df=None):
         'paired with', 'teamed with', 'partner with', 'duo', 'tandem'
     ]) or ('and' in question_lower and any(word in question_lower for word in ['record', 'wins', 'partner']))
 
+    # Check if question is about aggregate doubles record for a group of players
+    # e.g., "What is the aggregate doubles record when any two of Hilts, Lynch, Connolly are partners?"
+    is_aggregate_group_question = any(phrase in question_lower for phrase in [
+        'aggregate', 'combined record', 'any two of', 'any pair of', 'any pairing of',
+        'group record', 'together as partners', 'any combination of', 'when any of',
+        'among these players', 'between these players', 'within this group'
+    ]) and is_doubles_question
+
     # Check if question is about individual FBC performance (per-player, per-event)
     is_performance_question = any(phrase in question_lower for phrase in [
         'best fbc', 'worst fbc', 'best performance', 'worst performance', 'best cup',
@@ -809,6 +904,37 @@ def prepare_data_context(df, question, cups_df=None):
                     context_parts.append(f"    {pstats['Partnership']}: {pstats['Wins']} wins, {pstats['Record']}, {pstats['Win%']:.1%}, {pstats['Matches']} matches together")
                 else:
                     context_parts.append(f"    {p1} & {p2}: Never partnered in doubles")
+
+        # Calculate aggregate doubles record for the group (only matches where BOTH partners are in the group)
+        aggregate_stats = get_aggregate_group_doubles_stats(df, mentioned_players)
+        if aggregate_stats and aggregate_stats['total_matches'] > 0:
+            context_parts.append(f"\n  AGGREGATE DOUBLES RECORD FOR THIS GROUP:")
+            context_parts.append(f"  (Only includes matches where BOTH partners are in the group: {', '.join(mentioned_players)})")
+            context_parts.append(f"    Combined Record: {aggregate_stats['record']}")
+            context_parts.append(f"    Total Wins: {aggregate_stats['total_wins']}")
+            context_parts.append(f"    Total Losses: {aggregate_stats['total_losses']}")
+            context_parts.append(f"    Total Ties: {aggregate_stats['total_ties']}")
+            context_parts.append(f"    Total Matches: {aggregate_stats['total_matches']}")
+            context_parts.append(f"    Win Percentage: {aggregate_stats['win_pct']:.1%}")
+            context_parts.append(f"    Total Points: {aggregate_stats['total_points']:.1f}")
+            if aggregate_stats['excluded_matches'] > 0:
+                context_parts.append(f"    Note: {aggregate_stats['excluded_note']}")
+
+            # Show breakdown by partnership
+            if aggregate_stats['partnerships']:
+                context_parts.append(f"\n  Breakdown by Partnership (within group):")
+                for pstat in aggregate_stats['partnerships']:
+                    context_parts.append(f"    {pstat['Partnership']}: {pstat['Record']}, {pstat['Win%']:.1%}, {pstat['Matches']} matches")
+        elif aggregate_stats:
+            context_parts.append(f"\n  AGGREGATE DOUBLES RECORD FOR THIS GROUP:")
+            context_parts.append(f"  No doubles matches found where both partners are in the group: {', '.join(mentioned_players)}")
+
+    # If asking about aggregate group doubles, add emphasis
+    if is_aggregate_group_question and len(mentioned_players) >= 2:
+        context_parts.append(f"\n  *** IMPORTANT: The question asks about AGGREGATE DOUBLES RECORD for a group. ***")
+        context_parts.append(f"  *** Use the AGGREGATE DOUBLES RECORD section above. ***")
+        context_parts.append(f"  *** This ONLY includes matches where BOTH Player 1 AND Player 2 are in the specified group. ***")
+        context_parts.append(f"  *** Matches where only one partner is in the group are EXCLUDED. ***")
 
     # If asking about partnerships, add emphasis
     if is_partnership_question:
