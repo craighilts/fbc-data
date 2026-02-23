@@ -317,6 +317,67 @@ def get_all_partnership_stats(df):
     # Sort by wins (descending), then by win% (descending)
     return sorted(results, key=lambda x: (x['Wins'], x['Win%']), reverse=True)
 
+def get_opponent_pairs_never_partnered(df):
+    """Calculate all opponent pairs and identify those who have never been doubles partners.
+
+    An 'opponent pair' is any two players who appeared on opposite sides in a match:
+    - Singles: Player 1 vs their Singles Opponent
+    - Doubles/FTAS: each player on one team vs each player on the opposing team
+
+    Returns a list of dicts sorted by opponent match count (descending), filtered to
+    only include pairs that have NEVER been doubles partners.
+    """
+    from collections import Counter
+
+    match_type_col = 'Singles/Doubles' if 'Singles/Doubles' in df.columns else 'Singes/Doubles'
+
+    opponent_pair_counts = Counter()
+
+    for _, row in df.iterrows():
+        p1 = row.get('Player 1')
+        p2 = row.get('Player 2')
+        opp1 = row.get('Opponent1')
+        opp2 = row.get('Opponent2')
+        singles_opp = row.get('Singles Opponent')
+        match_type = row.get(match_type_col)
+
+        if match_type == 'Singles':
+            opponent = singles_opp if pd.notna(singles_opp) else opp1
+            if pd.notna(p1) and pd.notna(opponent) and isinstance(p1, str) and isinstance(opponent, str):
+                pair = tuple(sorted([p1, opponent]))
+                opponent_pair_counts[pair] += 1
+        else:
+            # Doubles/FTAS: each player on one side vs each on the other
+            team = [p for p in [p1, p2] if pd.notna(p) and isinstance(p, str)]
+            opponents = [p for p in [opp1, opp2] if pd.notna(p) and isinstance(p, str)]
+            for t in team:
+                for o in opponents:
+                    pair = tuple(sorted([t, o]))
+                    opponent_pair_counts[pair] += 1
+
+    # Get all doubles partnership pairs (players who have been on the same team)
+    doubles_df = df[df[match_type_col] == 'Doubles']
+    partnership_pairs = set()
+    for _, row in doubles_df.iterrows():
+        p1 = row.get('Player 1')
+        p2 = row.get('Player 2')
+        if pd.notna(p1) and pd.notna(p2) and isinstance(p1, str) and isinstance(p2, str):
+            partnership_pairs.add(tuple(sorted([p1, p2])))
+
+    # Filter to pairs that have NEVER been doubles partners
+    never_partnered = []
+    for pair, count in opponent_pair_counts.items():
+        if pair not in partnership_pairs:
+            never_partnered.append({
+                'Player1': pair[0],
+                'Player2': pair[1],
+                'Pair': f"{pair[0]} & {pair[1]}",
+                'OpponentMatches': count
+            })
+
+    never_partnered.sort(key=lambda x: x['OpponentMatches'], reverse=True)
+    return never_partnered
+
 def get_specific_partnership_stats(df, player1, player2):
     """Get the record for a specific doubles partnership."""
     # Handle both column names (typo in some versions)
@@ -910,6 +971,14 @@ def prepare_data_context(df, question, cups_df=None):
     for i, pstat in enumerate(partnership_stats[:25], 1):
         context_parts.append(f"    {i}. {pstat['Partnership']}: {pstat['Wins']} wins, {pstat['Record']}, {pstat['Win%']:.1%}, {pstat['Matches']} matches, {pstat['Events']} events")
 
+    # OPPONENT PAIRS NEVER PARTNERED
+    never_partnered = get_opponent_pairs_never_partnered(df)
+    context_parts.append(f"\n  OPPONENT PAIRS NEVER PARTNERED (Top 30):")
+    context_parts.append(f"  (Pairs who have faced each other as opponents across singles/doubles but have NEVER been doubles partners)")
+    context_parts.append(f"  (OpponentMatches = total matches where they were on opposite sides)")
+    for i, npair in enumerate(never_partnered[:30], 1):
+        context_parts.append(f"    {i}. {npair['Pair']}: {npair['OpponentMatches']} opponent matches, never partnered in doubles")
+
     # INDIVIDUAL FBC PERFORMANCE LEADERBOARD (per-player, per-event)
     all_performances = get_all_individual_fbc_performances(df)
 
@@ -1078,6 +1147,12 @@ DOUBLES PARTNERSHIPS:
 - Use this leaderboard when asked about "best doubles team", "partnership records", "who has won the most as partners", etc.
 - A partnership is identified by two player names (e.g., "Hilts & Lynch") and shows their combined record when playing as teammates
 - Note: Individual doubles stats (DOUBLES ONLY LEADERBOARD) are DIFFERENT from partnership stats - individual stats count each player separately, while partnership stats count the team's record together
+
+OPPONENT PAIRS NEVER PARTNERED:
+- The OPPONENT PAIRS NEVER PARTNERED leaderboard shows pairs of players who have faced each other as opponents but have NEVER been doubles partners
+- "OpponentMatches" counts every match where the two players were on opposite sides (singles: direct opponents; doubles/FTAS: on opposing teams)
+- These pairs have zero doubles matches together as partners
+- Use this when asked about "who has played the most against each other without being partners", "rivals who never teamed up", etc.
 
 INDIVIDUAL FBC PERFORMANCES (Per-Player, Per-Event):
 - The BEST/WORST INDIVIDUAL FBC PERFORMANCES leaderboards show each player's performance at each specific FBC event
@@ -2083,30 +2158,29 @@ def main():
 
         st.markdown("---")
 
-        # Text input for custom questions
-        user_question = st.text_input(
-            "Your question:",
-            value=st.session_state.claude_question,
-            placeholder="e.g., Who has the best overall win percentage?",
-            key="question_input"
-        )
+        # Form for question submission (Enter key or button both work)
+        with st.form("claude_question_form", clear_on_submit=False):
+            user_question = st.text_input(
+                "Your question:",
+                value=st.session_state.claude_question,
+                placeholder="e.g., Who has the best overall win percentage?",
+                key="question_input"
+            )
+            form_submitted = st.form_submit_button("Ask Claude", type="primary", use_container_width=True)
 
-        # Sync text input back to session state
-        if user_question != st.session_state.claude_question:
-            st.session_state.claude_question = user_question
-
-        # Submit button
-        submit_clicked = st.button("Ask Claude", type="primary", use_container_width=True)
-
-        # Determine if we should submit (either button clicked or auto-submit from example)
-        should_submit = submit_clicked or st.session_state.submit_question
+        # Determine if we should submit (form submitted or auto-submit from example button)
+        should_submit = form_submitted or st.session_state.submit_question
 
         # Reset the auto-submit flag
         if st.session_state.submit_question:
             st.session_state.submit_question = False
 
-        # Get the question to use
-        question_to_ask = st.session_state.claude_question
+        # Get the question to use (form value on form submit, session state on example button)
+        question_to_ask = user_question if form_submitted else st.session_state.claude_question
+
+        # Keep session state in sync
+        if form_submitted and user_question:
+            st.session_state.claude_question = user_question
 
         if should_submit and question_to_ask.strip():
             # Check if API key is configured
