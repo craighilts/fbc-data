@@ -180,9 +180,8 @@ def load_data():
     df = df.dropna(subset=['Player 1'])
     df = df[df['Player 1'].apply(lambda x: isinstance(x, str))]
 
-    # Standardize player names (fix inconsistencies)
+    # Standardize player names (fix inconsistencies in source data)
     name_map = {
-        'Shivelli': 'Shively',
         'DeOteris': 'Deoteris',
         'Connolly, R': 'R. Connolly'
     }
