@@ -18,80 +18,104 @@ COLORS = {
     'secondary': '#2E8B57',    # Sea green
     'accent': '#FFD700',       # Gold
     'light': '#90EE90',        # Light green
-    'bg': '#F5F5DC',           # Beige
+    'bg': '#F7F9F7',           # Clean light background
     'text': '#1B4D3E',
-    'win': '#2E8B57',
-    'loss': '#DC143C',
-    'tie': '#DAA520'
+    'win': '#16A34A',
+    'loss': '#DC2626',
+    'tie': '#D97706'
 }
 
-# Custom CSS for mobile-friendly design
+# Custom CSS
 st.markdown(f"""
 <style>
     .stApp {{
         background-color: {COLORS['bg']};
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }}
     .main-header {{
-        background: linear-gradient(135deg, {COLORS['primary']} 0%, {COLORS['secondary']} 100%);
+        background: {COLORS['primary']};
         color: white;
-        padding: 1.5rem;
-        border-radius: 10px;
+        padding: 2rem 1.5rem;
+        border-radius: 12px;
         text-align: center;
-        margin-bottom: 1.5rem;
+        margin-bottom: 2rem;
     }}
     .main-header h1 {{
         margin: 0;
         font-size: 2rem;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+    }}
+    .main-header p {{
+        margin: 0.4rem 0 0;
+        opacity: 0.7;
+        font-size: 0.85rem;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
     }}
     .stat-card {{
         background: white;
-        padding: 1rem;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        padding: 1.25rem 1rem;
+        border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(27,77,62,0.06);
         text-align: center;
-        border-left: 4px solid {COLORS['primary']};
+        border-top: 3px solid {COLORS['primary']};
     }}
     .stat-value {{
-        font-size: 1.8rem;
-        font-weight: bold;
+        font-size: 1.75rem;
+        font-weight: 700;
         color: {COLORS['primary']};
+        letter-spacing: -0.5px;
     }}
     .stat-label {{
-        font-size: 0.85rem;
-        color: #666;
+        font-size: 0.72rem;
+        color: #6B7280;
         text-transform: uppercase;
+        letter-spacing: 0.8px;
+        margin-top: 0.2rem;
     }}
     .section-header {{
         color: {COLORS['primary']};
+        font-weight: 700;
         border-bottom: 2px solid {COLORS['accent']};
-        padding-bottom: 0.5rem;
+        padding-bottom: 0.4rem;
         margin: 1.5rem 0 1rem 0;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        font-size: 1rem;
     }}
-    .win {{ color: {COLORS['win']}; font-weight: bold; }}
-    .loss {{ color: {COLORS['loss']}; font-weight: bold; }}
-    .tie {{ color: {COLORS['tie']}; font-weight: bold; }}
+    .win {{ color: {COLORS['win']}; font-weight: 600; }}
+    .loss {{ color: {COLORS['loss']}; font-weight: 600; }}
+    .tie {{ color: {COLORS['tie']}; font-weight: 600; }}
     .dataframe {{
         font-size: 0.9rem !important;
     }}
     @media (max-width: 768px) {{
         .stat-value {{ font-size: 1.4rem; }}
-        .stat-label {{ font-size: 0.75rem; }}
+        .stat-label {{ font-size: 0.68rem; }}
         .main-header h1 {{ font-size: 1.5rem; }}
     }}
     div[data-testid="stMetricValue"] {{
         font-size: 1.5rem;
     }}
     .stTabs [data-baseweb="tab-list"] {{
-        gap: 8px;
+        gap: 4px;
+        background-color: #E8F0E8;
+        padding: 4px;
+        border-radius: 10px;
     }}
     .stTabs [data-baseweb="tab"] {{
-        background-color: white;
-        border-radius: 5px 5px 0 0;
+        background-color: transparent;
+        border-radius: 7px;
         padding: 8px 16px;
+        font-weight: 500;
+        color: #4B6B5A;
     }}
     .stTabs [aria-selected="true"] {{
-        background-color: {COLORS['primary']};
-        color: white;
+        background-color: white;
+        color: {COLORS['primary']};
+        font-weight: 600;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.1);
     }}
 </style>
 """, unsafe_allow_html=True)
@@ -228,7 +252,7 @@ def get_player_by_event(df, player):
 
 def get_partner_performance(df, player):
     """Get player's record with each doubles partner."""
-    doubles_matches = df[df['Singes/Doubles'] == 'Doubles'].copy()
+    doubles_matches = df[df['Singles/Doubles'] == 'Doubles'].copy()
 
     # Matches where player is Player 1
     as_p1 = doubles_matches[doubles_matches['Player 1'] == player].copy()
@@ -258,15 +282,14 @@ def get_partner_performance(df, player):
 
     return partner_stats[['Partner', 'Record', 'Win%', 'Points', 'Matches']].sort_values('Matches', ascending=False)
 
+@st.cache_data
 def get_all_partnership_stats(df):
     """Calculate statistics for all doubles partnerships.
 
     Returns a list of partnership records sorted by wins (descending).
     Each partnership is identified by the two player names (in alphabetical order).
     """
-    # Handle both column names (typo in some versions)
-    match_type_col = 'Singles/Doubles' if 'Singles/Doubles' in df.columns else 'Singes/Doubles'
-    doubles_matches = df[df[match_type_col] == 'Doubles'].copy()
+    doubles_matches = df[df['Singles/Doubles'] == 'Doubles'].copy()
 
     if len(doubles_matches) == 0:
         return []
@@ -317,6 +340,7 @@ def get_all_partnership_stats(df):
     # Sort by wins (descending), then by win% (descending)
     return sorted(results, key=lambda x: (x['Wins'], x['Win%']), reverse=True)
 
+@st.cache_data
 def get_opponent_pairs_never_partnered(df):
     """Calculate all opponent pairs and identify those who have never been doubles partners.
 
@@ -329,8 +353,6 @@ def get_opponent_pairs_never_partnered(df):
     """
     from collections import Counter
 
-    match_type_col = 'Singles/Doubles' if 'Singles/Doubles' in df.columns else 'Singes/Doubles'
-
     opponent_pair_counts = Counter()
 
     for _, row in df.iterrows():
@@ -339,7 +361,7 @@ def get_opponent_pairs_never_partnered(df):
         opp1 = row.get('Opponent1')
         opp2 = row.get('Opponent2')
         singles_opp = row.get('Singles Opponent')
-        match_type = row.get(match_type_col)
+        match_type = row.get('Singles/Doubles')
 
         if match_type == 'Singles':
             opponent = singles_opp if pd.notna(singles_opp) else opp1
@@ -356,7 +378,7 @@ def get_opponent_pairs_never_partnered(df):
                     opponent_pair_counts[pair] += 1
 
     # Get all doubles partnership pairs (players who have been on the same team)
-    doubles_df = df[df[match_type_col] == 'Doubles']
+    doubles_df = df[df['Singles/Doubles'] == 'Doubles']
     partnership_pairs = set()
     for _, row in doubles_df.iterrows():
         p1 = row.get('Player 1')
@@ -380,9 +402,7 @@ def get_opponent_pairs_never_partnered(df):
 
 def get_specific_partnership_stats(df, player1, player2):
     """Get the record for a specific doubles partnership."""
-    # Handle both column names (typo in some versions)
-    match_type_col = 'Singles/Doubles' if 'Singles/Doubles' in df.columns else 'Singes/Doubles'
-    doubles_matches = df[df[match_type_col] == 'Doubles'].copy()
+    doubles_matches = df[df['Singles/Doubles'] == 'Doubles'].copy()
 
     # Find matches where both players were partners (in either order)
     partnership_matches = doubles_matches[
@@ -424,9 +444,7 @@ def get_aggregate_group_doubles_stats(df, player_group):
     Returns:
         Dictionary with aggregate stats, individual partnership breakdowns, and excluded matches info
     """
-    # Try both column names (handle typo in some data versions)
-    match_type_col = 'Singles/Doubles' if 'Singles/Doubles' in df.columns else 'Singes/Doubles'
-    doubles_matches = df[df[match_type_col] == 'Doubles'].copy()
+    doubles_matches = df[df['Singles/Doubles'] == 'Doubles'].copy()
 
     if len(doubles_matches) == 0 or len(player_group) < 2:
         return None
@@ -572,27 +590,28 @@ def get_course_performance(df, player):
 
     return course_stats[['Course', 'Record', 'Win%', 'Points', 'Matches']].sort_values('Win%', ascending=False)
 
+@st.cache_data
 def get_leaderboard(df):
-    """Calculate overall leaderboard."""
-    all_players = set(df['Player 1'].dropna().unique()) | set(df[df['Player 2'].notna()]['Player 2'].unique())
+    """Calculate overall leaderboard using vectorized groupby."""
+    p1 = df[['Player 1', 'W', 'L', 'T', 'Points earned', 'FBC']].rename(columns={'Player 1': 'Player'})
+    p2 = df[df['Player 2'].notna()][['Player 2', 'W', 'L', 'T', 'Points earned', 'FBC']].rename(columns={'Player 2': 'Player'})
+    stacked = pd.concat([p1, p2], ignore_index=True)
+    stacked = stacked[stacked['Player'].apply(lambda x: isinstance(x, str))]
 
-    leaderboard = []
-    for player in all_players:
-        if not isinstance(player, str):
-            continue
-        stats = get_player_stats(df, player)
-        if stats:
-            leaderboard.append({
-                'Player': player,
-                'Points': stats['points'],
-                'Record': stats['record'],
-                'Win%': stats['win_pct'],
-                'Matches': stats['matches'],
-                'Events': stats['events'],
-                'Pts/Event': stats['points'] / stats['events'] if stats['events'] > 0 else 0
-            })
+    agg = stacked.groupby('Player').agg(
+        Points=('Points earned', 'sum'),
+        W=('W', 'sum'),
+        L=('L', 'sum'),
+        T=('T', 'sum'),
+        Events=('FBC', 'nunique')
+    ).reset_index()
 
-    return pd.DataFrame(leaderboard).sort_values('Points', ascending=False).reset_index(drop=True)
+    agg['Matches'] = agg['W'] + agg['L'] + agg['T']
+    agg['Win%'] = (agg['W'] + 0.5 * agg['T']) / agg['Matches']
+    agg['Record'] = agg.apply(lambda r: f"{int(r['W'])}-{int(r['L'])}-{int(r['T'])}", axis=1)
+    agg['Pts/Event'] = agg['Points'] / agg['Events']
+
+    return agg[['Player', 'Points', 'Record', 'Win%', 'Matches', 'Events', 'Pts/Event']].sort_values('Points', ascending=False).reset_index(drop=True)
 
 def extract_fbc_number(question):
     """Extract FBC event number from a question if mentioned."""
@@ -703,83 +722,83 @@ def extract_course_names(question, all_courses):
     return mentioned
 
 def calculate_player_stats_for_subset(df, players=None):
-    """Calculate stats for all players in a subset of matches."""
-    if players is None:
-        players = set(df['Player 1'].dropna().unique()) | set(df[df['Player 2'].notna()]['Player 2'].unique())
-        players = [p for p in players if isinstance(p, str)]
+    """Calculate stats for all players (or a subset) in a given DataFrame."""
+    p1 = df[['Player 1', 'W', 'L', 'T', 'Points earned']].rename(columns={'Player 1': 'Player'})
+    p2 = df[df['Player 2'].notna()][['Player 2', 'W', 'L', 'T', 'Points earned']].rename(columns={'Player 2': 'Player'})
+    stacked = pd.concat([p1, p2], ignore_index=True)
+    stacked = stacked[stacked['Player'].apply(lambda x: isinstance(x, str))]
 
-    stats = []
-    for player in players:
-        player_matches = df[(df['Player 1'] == player) | (df['Player 2'] == player)]
-        if len(player_matches) == 0:
-            continue
+    if players is not None:
+        stacked = stacked[stacked['Player'].isin(players)]
 
-        wins = player_matches['W'].sum()
-        losses = player_matches['L'].sum()
-        ties = player_matches['T'].sum()
-        points = player_matches['Points earned'].sum()
-        matches = len(player_matches)
+    if stacked.empty:
+        return []
 
-        stats.append({
-            'Player': player,
-            'Points': points,
-            'Wins': int(wins),
-            'Losses': int(losses),
-            'Ties': int(ties),
-            'Matches': matches,
-            'Record': f"{int(wins)}-{int(losses)}-{int(ties)}",
-            'Win%': (wins + 0.5 * ties) / matches if matches > 0 else 0
+    agg = stacked.groupby('Player').agg(
+        Points=('Points earned', 'sum'),
+        Wins=('W', 'sum'),
+        Losses=('L', 'sum'),
+        Ties=('T', 'sum')
+    ).reset_index()
+
+    agg['Matches'] = agg['Wins'] + agg['Losses'] + agg['Ties']
+    agg['Win%'] = (agg['Wins'] + 0.5 * agg['Ties']) / agg['Matches']
+    agg['Record'] = agg.apply(lambda r: f"{int(r['Wins'])}-{int(r['Losses'])}-{int(r['Ties'])}", axis=1)
+
+    result = []
+    for _, row in agg.iterrows():
+        result.append({
+            'Player': row['Player'],
+            'Points': row['Points'],
+            'Wins': int(row['Wins']),
+            'Losses': int(row['Losses']),
+            'Ties': int(row['Ties']),
+            'Matches': int(row['Matches']),
+            'Win%': row['Win%'],
+            'Record': row['Record']
         })
+    return sorted(result, key=lambda x: x['Points'], reverse=True)
 
-    return sorted(stats, key=lambda x: x['Points'], reverse=True)
-
+@st.cache_data
 def get_all_individual_fbc_performances(df):
-    """Calculate per-player, per-FBC event performance stats.
+    """Calculate per-player, per-FBC event performance stats using vectorized groupby."""
+    p1 = df[['Player 1', 'W', 'L', 'T', 'Points earned', 'FBC', 'Geographic Location']].rename(columns={'Player 1': 'Player'})
+    p2 = df[df['Player 2'].notna()][['Player 2', 'W', 'L', 'T', 'Points earned', 'FBC', 'Geographic Location']].rename(columns={'Player 2': 'Player'})
+    stacked = pd.concat([p1, p2], ignore_index=True)
+    stacked = stacked[stacked['Player'].apply(lambda x: isinstance(x, str))]
 
-    Returns a list of dicts with each player's performance at each FBC event,
-    sorted by points (best performances first).
-    """
-    all_players = set(df['Player 1'].dropna().unique()) | set(df[df['Player 2'].notna()]['Player 2'].unique())
-    all_players = [p for p in all_players if isinstance(p, str)]
-    all_events = sorted([int(e) for e in df['FBC'].dropna().unique() if pd.notna(e)])
+    event_locations = df.groupby('FBC')['Geographic Location'].first().to_dict()
 
-    performances = []
+    agg = stacked.groupby(['Player', 'FBC']).agg(
+        Wins=('W', 'sum'),
+        Losses=('L', 'sum'),
+        Ties=('T', 'sum'),
+        Points=('Points earned', 'sum')
+    ).reset_index()
 
-    for player in all_players:
-        player_matches = df[(df['Player 1'] == player) | (df['Player 2'] == player)]
+    agg['Matches'] = agg['Wins'] + agg['Losses'] + agg['Ties']
+    agg['Win%'] = (agg['Wins'] + 0.5 * agg['Ties']) / agg['Matches']
+    agg['Record'] = agg.apply(lambda r: f"{int(r['Wins'])}-{int(r['Losses'])}-{int(r['Ties'])}", axis=1)
+    agg['PPM'] = agg['Points'] / agg['Matches']
+    agg['Location'] = agg['FBC'].map(event_locations).fillna('Unknown')
+    agg['FBC'] = agg['FBC'].astype(int)
 
-        for fbc in all_events:
-            event_matches = player_matches[player_matches['FBC'] == fbc]
-            if len(event_matches) == 0:
-                continue
-
-            wins = int(event_matches['W'].sum())
-            losses = int(event_matches['L'].sum())
-            ties = int(event_matches['T'].sum())
-            points = event_matches['Points earned'].sum()
-            matches = len(event_matches)
-            location = event_matches['Geographic Location'].iloc[0] if pd.notna(event_matches['Geographic Location'].iloc[0]) else "Unknown"
-
-            win_pct = (wins + 0.5 * ties) / matches if matches > 0 else 0
-
-            # Calculate points per match for comparison
-            ppm = points / matches if matches > 0 else 0
-
-            performances.append({
-                'Player': player,
-                'FBC': int(fbc),
-                'Location': location,
-                'Points': points,
-                'Wins': wins,
-                'Losses': losses,
-                'Ties': ties,
-                'Matches': matches,
-                'Record': f"{wins}-{losses}-{ties}",
-                'Win%': win_pct,
-                'PPM': ppm  # Points per match
-            })
-
-    return performances
+    result = []
+    for _, row in agg.iterrows():
+        result.append({
+            'Player': row['Player'],
+            'FBC': row['FBC'],
+            'Location': row['Location'],
+            'Points': row['Points'],
+            'Wins': int(row['Wins']),
+            'Losses': int(row['Losses']),
+            'Ties': int(row['Ties']),
+            'Matches': int(row['Matches']),
+            'Record': row['Record'],
+            'Win%': row['Win%'],
+            'PPM': row['PPM']
+        })
+    return result
 
 def prepare_data_context(df, question, cups_df=None):
     """Prepare relevant FBC data context based on the question."""
@@ -844,7 +863,7 @@ def prepare_data_context(df, question, cups_df=None):
             context_parts.append(f"Total matches: {len(event_df)}")
 
             # Match type breakdown
-            match_types = event_df['Singes/Doubles'].value_counts().to_dict()
+            match_types = event_df['Singles/Doubles'].value_counts().to_dict()
             context_parts.append(f"Match types: {', '.join(f'{k}: {v}' for k, v in match_types.items())}")
 
             # Calculate and show complete leaderboard for this event
@@ -863,7 +882,7 @@ def prepare_data_context(df, question, cups_df=None):
                 course = row.get('Course', '')
                 wlt = row.get('W/L/T', '')
                 result = row.get('Result', '')
-                match_type = row.get('Singes/Doubles', '')
+                match_type = row.get('Singles/Doubles', '')
                 format_type = row.get('Format', '')
                 pts = row.get('Points earned', 0)
 
@@ -895,7 +914,7 @@ def prepare_data_context(df, question, cups_df=None):
             # By match type
             context_parts.append(f"\n  By Match Type:")
             for match_type in ['Doubles', 'Singles', 'FTAS']:
-                type_matches = player_matches[player_matches['Singes/Doubles'] == match_type]
+                type_matches = player_matches[player_matches['Singles/Doubles'] == match_type]
                 if len(type_matches) > 0:
                     type_stats = calculate_player_stats_for_subset(type_matches, [player])
                     if type_stats:
@@ -947,9 +966,9 @@ def prepare_data_context(df, question, cups_df=None):
     for i, stat in enumerate(overall_stats[:20], 1):
         context_parts.append(f"    {i}. {stat['Player']}: {stat['Points']:.1f} pts, {stat['Record']}, {stat['Win%']:.1%}")
 
-    # SINGLES LEADERBOARD - Filter by 'Singes/Doubles' column (note: typo in column name is 'Singes')
+    # SINGLES LEADERBOARD - Filter by 'Singles/Doubles' column
     # This column contains 'Singles', 'Doubles', or 'FTAS'
-    singles_df = df[df['Singes/Doubles'] == 'Singles']
+    singles_df = df[df['Singles/Doubles'] == 'Singles']
     context_parts.append(f"\n  SINGLES ONLY LEADERBOARD (Top 20):")
     context_parts.append(f"  (These stats are ONLY from singles matches - {len(singles_df)} total singles matches)")
     singles_stats = calculate_player_stats_for_subset(singles_df)
@@ -957,7 +976,7 @@ def prepare_data_context(df, question, cups_df=None):
         context_parts.append(f"    {i}. {stat['Player']}: {stat['Wins']} wins, {stat['Record']}, {stat['Win%']:.1%}, {stat['Points']:.1f} pts")
 
     # DOUBLES LEADERBOARD
-    doubles_df = df[df['Singes/Doubles'] == 'Doubles']
+    doubles_df = df[df['Singles/Doubles'] == 'Doubles']
     context_parts.append(f"\n  DOUBLES ONLY LEADERBOARD (Top 20):")
     context_parts.append(f"  (These stats are ONLY from doubles matches - {len(doubles_df)} total doubles matches)")
     doubles_stats = calculate_player_stats_for_subset(doubles_df)
@@ -1071,10 +1090,10 @@ def prepare_data_context(df, question, cups_df=None):
     # If specifically asking about singles or doubles, add extra emphasis
     if is_singles_question:
         context_parts.append(f"\n  *** IMPORTANT: The question asks about SINGLES matches. Use the SINGLES ONLY LEADERBOARD above. ***")
-        context_parts.append(f"  *** Singles matches are where 'Singes/Doubles' column equals 'Singles' ***")
+        context_parts.append(f"  *** Singles matches are where 'Singles/Doubles' column equals 'Singles' ***")
     if is_doubles_question:
         context_parts.append(f"\n  *** IMPORTANT: The question asks about DOUBLES matches. Use the DOUBLES ONLY LEADERBOARD above. ***")
-        context_parts.append(f"  *** Doubles matches are where 'Singes/Doubles' column equals 'Doubles' ***")
+        context_parts.append(f"  *** Doubles matches are where 'Singles/Doubles' column equals 'Doubles' ***")
 
     # Add Cups data if available and relevant
     if cups_df is not None and (is_cups_question or mentioned_players):
@@ -1176,7 +1195,7 @@ from individual match wins. The Cups data shows team championship results.
 Be concise but thorough. Always cite the specific data that supports your answer."""
 
     message = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=1024,
         system=system_prompt,
         messages=[
@@ -1226,7 +1245,7 @@ def get_stats_by_format(df, player):
 
     format_stats = {}
     for fmt in ['Singles', 'Doubles', 'FTAS']:
-        fmt_matches = player_matches[player_matches['Singes/Doubles'] == fmt]
+        fmt_matches = player_matches[player_matches['Singles/Doubles'] == fmt]
         if len(fmt_matches) > 0:
             wins = fmt_matches['W'].sum()
             losses = fmt_matches['L'].sum()
@@ -1277,7 +1296,7 @@ def get_best_worst_courses(df, player, top_n=3):
 
 def get_best_partners(df, player, top_n=3):
     """Get player's best doubles partners by win percentage."""
-    doubles = df[df['Singes/Doubles'] == 'Doubles']
+    doubles = df[df['Singles/Doubles'] == 'Doubles']
 
     # Find all partners
     as_p1 = doubles[doubles['Player 1'] == player].copy()
@@ -1315,6 +1334,8 @@ def get_best_partners(df, player, top_n=3):
 def get_recent_form(df, player, n_matches=10):
     """Get player's recent form (last n matches)."""
     player_matches = df[(df['Player 1'] == player) | (df['Player 2'] == player)]
+    if 'Date' in df.columns:
+        player_matches = player_matches.sort_values('Date')
     recent = player_matches.tail(n_matches)
 
     if len(recent) == 0:
@@ -1356,7 +1377,7 @@ def get_player_course_stats(df, player, course):
 
 def get_partner_chemistry(df, player1, player2):
     """Get the record when two players are partners in doubles."""
-    doubles = df[df['Singes/Doubles'] == 'Doubles']
+    doubles = df[df['Singles/Doubles'] == 'Doubles']
 
     # Find matches where both players were on the same team
     team_matches = doubles[
@@ -1643,6 +1664,7 @@ def main():
         )
 
         leaderboard = get_leaderboard(df)
+        lb_data = leaderboard.copy()  # preserve raw data for quick stats cards below
         leaderboard = leaderboard.sort_values(sort_col, ascending=False).reset_index(drop=True)
 
         # Add rank column
@@ -1673,8 +1695,6 @@ def main():
         st.markdown("<h4 class='section-header'>Quick Stats</h4>", unsafe_allow_html=True)
 
         col1, col2, col3 = st.columns(3)
-
-        lb_data = get_leaderboard(df)
 
         with col1:
             top_points = lb_data.nlargest(1, 'Points').iloc[0]
@@ -1757,12 +1777,6 @@ def main():
 
             st.markdown("<h4 class='section-header'>Cup Results by Player</h4>", unsafe_allow_html=True)
 
-            # Create display dataframe
-            display_df = cups_df.copy()
-
-            # Format Win% as percentage
-            display_df['Win%'] = display_df['Win%'].apply(lambda x: f"{x:.1%}" if pd.notna(x) else "")
-
             # Sort options
             sort_by = st.selectbox(
                 "Sort by",
@@ -1771,12 +1785,17 @@ def main():
                 key="cups_sort"
             )
 
+            display_df = cups_df.copy()
+
             if sort_by == 'Player':
                 display_df = display_df.sort_values('Player')
             elif sort_by == 'Win%':
-                display_df = display_df.sort_values(cups_df['Win%'], ascending=False)
+                display_df = display_df.sort_values('Win%', ascending=False)
             else:
                 display_df = display_df.sort_values(sort_by, ascending=False)
+
+            # Format Win% as percentage after sorting
+            display_df['Win%'] = display_df['Win%'].apply(lambda x: f"{x:.1%}" if pd.notna(x) else "")
 
             # Show the table
             st.dataframe(
@@ -2209,8 +2228,9 @@ def main():
             st.markdown(f"**Question:** {st.session_state.last_question}")
             st.markdown("**Claude's Answer:**")
             st.markdown(f"""
-            <div style="background: white; padding: 1.5rem; border-radius: 10px;
-                        border-left: 4px solid {COLORS['primary']}; margin-top: 1rem;">
+            <div style="background: white; padding: 1.5rem 2rem; border-radius: 12px;
+                        box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(27,77,62,0.06);
+                        border-top: 3px solid {COLORS['primary']}; margin-top: 1rem;">
                 {st.session_state.claude_response}
             </div>
             """, unsafe_allow_html=True)
