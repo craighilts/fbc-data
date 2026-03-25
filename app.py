@@ -191,6 +191,14 @@ def load_data():
     df['Opponent2'] = df['Opponent2'].replace(name_map)
     df['Singles Opponent'] = df['Singles Opponent'].replace(name_map)
 
+    # Derive Singles/Doubles column if missing from older data files
+    if 'Singles/Doubles' not in df.columns:
+        df['Singles/Doubles'] = df.apply(
+            lambda row: 'Doubles' if pd.notna(row.get('Player 2')) else
+                        ('Singles' if pd.notna(row.get('Singles Opponent')) else 'FTAS'),
+            axis=1
+        )
+
     return df
 
 def get_player_stats(df, player):
@@ -251,6 +259,8 @@ def get_player_by_event(df, player):
 
 def get_partner_performance(df, player):
     """Get player's record with each doubles partner."""
+    if 'Singles/Doubles' not in df.columns:
+        return pd.DataFrame()
     doubles_matches = df[df['Singles/Doubles'] == 'Doubles'].copy()
 
     # Matches where player is Player 1
