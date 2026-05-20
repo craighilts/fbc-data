@@ -1,0 +1,317 @@
+{
+  "_comment": "FBC 13 roster, seeded from the existing Excel handicap workbook on May 18, 2026. Each member needs EITHER a 'ghin' field (for automated daily updates) OR a 'manual_handicap' block (for non-GHIN players). The seeded values from Excel are used until you add GHIN numbers \u2014 at which point the daily workflow takes over and live GHIN data overrides the seeded HI and low_hi. The historical fields (draft_hi, fbc12_index, played_fbc12) are static and always sourced from this file.",
+  "_lastEdited": "2026-05-18",
+  "_data_source_seed": "FBC 13 Handicaps Excel workbook as of 2026-05-18",
+  "members": [
+    {
+      "name": "Poirier",
+      "team": "forster",
+      "draft_hi": 4.2,
+      "fbc12_index": 4.3,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 4.7,
+        "low_hi": 3.2,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Zimmer",
+      "team": "forster",
+      "draft_hi": 7.4,
+      "fbc12_index": 8.6,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 6.8,
+        "low_hi": 6.7,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Connolly, B",
+      "team": "forster",
+      "draft_hi": 8.7,
+      "fbc12_index": 9.4,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 9,
+        "low_hi": 8.6,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Grise",
+      "team": "forster",
+      "draft_hi": 10.6,
+      "fbc12_index": 11.6,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 10.6,
+        "low_hi": 10.6,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Connolly, R",
+      "team": "forster",
+      "draft_hi": 10.2,
+      "fbc12_index": 12.1,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 10.8,
+        "low_hi": 10.2,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Flanders",
+      "team": "forster",
+      "draft_hi": 9.7,
+      "fbc12_index": 6.7,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 11.1,
+        "low_hi": 6.7,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Forster",
+      "team": "forster",
+      "draft_hi": 11.1,
+      "fbc12_index": 10.9,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 11.1,
+        "low_hi": 10.9,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Delaney",
+      "team": "forster",
+      "draft_hi": 12.2,
+      "fbc12_index": 11.8,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 13.1,
+        "low_hi": 10.3,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Hilts",
+      "team": "forster",
+      "draft_hi": 16,
+      "fbc12_index": 16,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 15.7,
+        "low_hi": 15.7,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Cole",
+      "team": "forster",
+      "draft_hi": 16,
+      "fbc12_index": 16,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 16,
+        "low_hi": 16,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Delneky",
+      "team": "forster",
+      "draft_hi": 17.9,
+      "fbc12_index": 17.8,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 17.4,
+        "low_hi": 17.4,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Norat",
+      "team": "forster",
+      "draft_hi": 18,
+      "fbc12_index": null,
+      "played_fbc12": false,
+      "manual_handicap": {
+        "handicap_index": 18,
+        "low_hi": 18,
+        "note": "Not in GHIN system; seeded from Excel as of 2026-05-18. Edit this value here to update."
+      }
+    },
+    {
+      "name": "McInerney",
+      "team": "mangold",
+      "draft_hi": 3.5,
+      "fbc12_index": null,
+      "played_fbc12": false,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 2.9,
+        "low_hi": 2.3,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Gray",
+      "team": "mangold",
+      "draft_hi": 7.5,
+      "fbc12_index": 7.3,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 7.6,
+        "low_hi": 7.1,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Jackson",
+      "team": "mangold",
+      "draft_hi": 8.5,
+      "fbc12_index": 7.4,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 7.8,
+        "low_hi": 7.2,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Lynch",
+      "team": "mangold",
+      "draft_hi": 8.3,
+      "fbc12_index": 8.9,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 8.3,
+        "low_hi": 7.5,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Perkins",
+      "team": "mangold",
+      "draft_hi": 9.7,
+      "fbc12_index": 10.5,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 9.4,
+        "low_hi": 9.4,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Piegari",
+      "team": "mangold",
+      "draft_hi": 9.6,
+      "fbc12_index": 9,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 9.9,
+        "low_hi": 8.2,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Ferrin",
+      "team": "mangold",
+      "draft_hi": 10.6,
+      "fbc12_index": 10.1,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 10.5,
+        "low_hi": 9.2,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Welker",
+      "team": "mangold",
+      "draft_hi": 12.8,
+      "fbc12_index": null,
+      "played_fbc12": false,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 12.9,
+        "low_hi": 9.5,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Shively",
+      "team": "mangold",
+      "draft_hi": 12.9,
+      "fbc12_index": 12.9,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 12.9,
+        "low_hi": 12.9,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Mangold",
+      "team": "mangold",
+      "draft_hi": 14.4,
+      "fbc12_index": 14.7,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 14.2,
+        "low_hi": 13.9,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Fogan",
+      "team": "mangold",
+      "draft_hi": 17.3,
+      "fbc12_index": 17.4,
+      "played_fbc12": true,
+      "ghin": "PLACEHOLDER_ADD_GHIN_NUMBER",
+      "seeded_handicap": {
+        "handicap_index": 17.5,
+        "low_hi": 16.7,
+        "note": "Seeded from Excel as of 2026-05-18. Will be overridden by live GHIN data once a real GHIN number is added."
+      }
+    },
+    {
+      "name": "Connors",
+      "team": "mangold",
+      "draft_hi": 20,
+      "fbc12_index": null,
+      "played_fbc12": false,
+      "manual_handicap": {
+        "handicap_index": 20,
+        "low_hi": 20,
+        "note": "Not in GHIN system; seeded from Excel as of 2026-05-18. Edit this value here to update."
+      }
+    }
+  ]
+}

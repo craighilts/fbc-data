@@ -1,0 +1,63 @@
+name: Update FBC Handicaps
+
+# Runs daily and on manual trigger. GHIN handicaps recompute daily at midnight
+# local time (changed from twice-monthly in 2024). Running at 11:00 UTC
+# (6-7 AM ET) picks up the overnight revisions.
+#
+# On day 1: workflow runs without any live GHIN members; all 24 use Excel-seeded
+# or manual values. As GHIN numbers are added to data/members.json, those players
+# transition to live data automatically on the next run.
+
+on:
+  schedule:
+    - cron: '0 11 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-handicaps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch handicaps
+        working-directory: ./scripts
+        env:
+          GHIN_EMAIL: ${{ secrets.GHIN_EMAIL }}
+          GHIN_PASSWORD: ${{ secrets.GHIN_PASSWORD }}
+        run: node fetch-handicaps.js
+
+      - name: Check for changes
+        id: check_changes
+        run: |
+          if git diff --quiet data/handicaps.json; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No changes to handicaps.json"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "handicaps.json has changes"
+          fi
+
+      - name: Commit and push if changed
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          git config user.name "fbc-handicap-bot"
+          git config user.email "actions@github.com"
+          git add data/handicaps.json
+          git commit -m "chore: update handicaps $(date -u +%Y-%m-%d)"
+          git push
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Handicap update failed. Check logs above. Previous handicaps.json remains in place."
