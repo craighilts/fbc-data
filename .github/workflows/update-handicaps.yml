@@ -37,15 +37,17 @@ jobs:
           GHIN_PASSWORD: ${{ secrets.GHIN_PASSWORD }}
         run: node fetch-handicaps.js
 
-      - name: Check for changes
-        id: check_changes
+      - name: Commit and push if changed
         run: |
-          if git diff --quiet data/handicaps.json; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "No changes to handicaps.json"
+          git config user.name "fbc-handicap-bot"
+          git config user.email "actions@github.com"
+          git add data/handicaps.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
           else
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "handicaps.json has changes"
+            git commit -m "chore: update handicaps $(date -u +%Y-%m-%d)"
+            git push
+            echo "Committed and pushed"
           fi
 
       - name: Commit and push if changed
