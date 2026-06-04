@@ -180,17 +180,6 @@ def load_data():
     df = df.dropna(subset=['Player 1'])
     df = df[df['Player 1'].apply(lambda x: isinstance(x, str))]
 
-    # Standardize player names (fix inconsistencies in source data)
-    name_map = {
-        'DeOteris': 'Deoteris',
-        'Connolly, R': 'R. Connolly'
-    }
-    df['Player 1'] = df['Player 1'].replace(name_map)
-    df['Player 2'] = df['Player 2'].replace(name_map)
-    df['Opponent1'] = df['Opponent1'].replace(name_map)
-    df['Opponent2'] = df['Opponent2'].replace(name_map)
-    df['Singles Opponent'] = df['Singles Opponent'].replace(name_map)
-
     # Derive Singles/Doubles column if missing from older data files
     if 'Singles/Doubles' not in df.columns:
         df['Singles/Doubles'] = df.apply(
