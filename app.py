@@ -879,6 +879,41 @@ def get_fbc_team_results(df, fbc_num=None):
     return results
 
 
+def get_cup_results_table(df):
+    """Build a per-event summary table of every FBC cup result.
+
+    One row per FBC event with: winning captain, losing captain, location,
+    each team's point total, the margin of victory, and the highest individual
+    point total at that event (the event's top scorer). Team totals use the
+    FTAS-correct scoring from get_fbc_team_results. The top-scorer figure is the
+    player's total Points earned at the event (which, like all individual stats,
+    includes their 0.5 FTAS share).
+    """
+    results = get_fbc_team_results(df)
+    rows = []
+    for r in results:
+        event = df[df['FBC'] == r['fbc']]
+        stats = calculate_player_stats_for_subset(event)  # sorted by Points desc
+        if stats:
+            top_pts = max(s['Points'] for s in stats)
+            top_players = [s['Player'] for s in stats if abs(s['Points'] - top_pts) < 1e-9]
+            top_label = f"{', '.join(top_players)} ({top_pts:.1f})"
+        else:
+            top_label = ""
+        loser_pts = r['teams'][1][1] if len(r['teams']) >= 2 else None
+        rows.append({
+            'FBC': r['fbc'],
+            'Location': r['location'],
+            'Winning Captain': r['winner'],
+            'Losing Captain': r['loser'] or '',
+            'Winner Total': round(r['teams'][0][1], 1),
+            'Loser Total': round(loser_pts, 1) if loser_pts is not None else None,
+            'Margin': round(r['margin'], 1),
+            'Highest Individual': top_label,
+        })
+    return pd.DataFrame(rows)
+
+
 def prepare_data_context(df, question, cups_df=None):
     """Prepare relevant FBC data context based on the question."""
     # Get all players and courses for reference
@@ -1928,6 +1963,24 @@ def main():
                         <div class="stat-label">Most Cups Played ({most_played['Cups Played']})</div>
                     </div>
                     """, unsafe_allow_html=True)
+
+            # ----- Cup Results by Event (team scores, captains, margins) -----
+            st.markdown("<h4 class='section-header'>Cup Results by Event</h4>", unsafe_allow_html=True)
+            st.markdown(
+                "Final team result for every FBC. **Winner/Loser Total** are the team point totals "
+                "(the FTAS tiebreaker counts once, as 0.5 to the winning team), **Margin** is the gap "
+                "between them, and **Highest Individual** is the event's top individual point scorer."
+            )
+            try:
+                cup_results = get_cup_results_table(df)
+                st.dataframe(
+                    cup_results[['FBC', 'Location', 'Winning Captain', 'Losing Captain',
+                                 'Winner Total', 'Loser Total', 'Margin', 'Highest Individual']],
+                    hide_index=True,
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.warning(f"Could not build the cup results table: {e}")
 
             st.markdown("<h4 class='section-header'>Cup Results by Player</h4>", unsafe_allow_html=True)
 
