@@ -798,6 +798,87 @@ def get_all_individual_fbc_performances(df):
         })
     return result
 
+def _team_event_totals(event):
+    """Sum each team's points for one FBC event, scoring the FTAS correctly.
+
+    Most formats are entered as one row per team per match, so a plain sum is right.
+    The FTAS (Full Team Alternate Shot) is the exception: it is a single sudden-death
+    tiebreaker worth only 0.5 points TO THE WINNING TEAM, but it is recorded as one
+    row PER PLAYER (e.g. 11 rows per team) so that each player's individual record
+    reflects it. Summing those rows would count the FTAS ~11x and can even flip the
+    event winner (it did for FBC 4). So for FTAS we collapse each team's rows for that
+    match to a single team result (the shared per-player value) instead of summing.
+    See https://www.freddiebcup.com/ftas-rules — "0.5 points to the winning team."
+    """
+    is_ftas = (event['Singles/Doubles'].astype(str) == 'FTAS')
+    if 'Format' in event.columns:
+        is_ftas = is_ftas | (event['Format'].astype(str) == 'FTAS')
+
+    totals = {}
+    # Non-FTAS rows: straightforward sum per team
+    normal = event[~is_ftas]
+    for team, pts in normal.groupby('Team')['Points earned'].sum().items():
+        totals[team] = totals.get(team, 0.0) + float(pts)
+    # FTAS rows: one shared team result per match (use the mean of the team's rows,
+    # which equals the single team point since every player on a team shares the result)
+    ftas = event[is_ftas]
+    if len(ftas) > 0:
+        for (mid, team), grp in ftas.groupby(['UniqueMatchID', 'Team']):
+            totals[team] = totals.get(team, 0.0) + float(grp['Points earned'].mean())
+
+    return pd.Series(totals).sort_values(ascending=False)
+
+
+def get_fbc_team_results(df, fbc_num=None):
+    """Compute team standings, captains, and margins of victory for each FBC event.
+
+    In the FBC, every match row carries a 'Team' value which is the name of that
+    team's CAPTAIN (teams are named after their captain). Each team's final point
+    total is the points it earned across the event (with the FTAS tiebreaker scored
+    once, not per player — see _team_event_totals). The winning team has the most
+    points; the margin of victory is the gap to the runner-up.
+
+    Returns a list of dicts (one per event), each with:
+      fbc, location, teams (captain -> points, sorted high to low),
+      winner (captain), loser (captain, runner-up), margin, num_teams, tie.
+    """
+    if 'Team' not in df.columns:
+        return []
+
+    work = df[df['FBC'].notna() & df['Team'].notna()]
+    if fbc_num is not None:
+        work = work[work['FBC'] == fbc_num]
+
+    results = []
+    for fbc in sorted(work['FBC'].dropna().unique()):
+        event = work[work['FBC'] == fbc]
+        totals = _team_event_totals(event)
+        if len(totals) == 0:
+            continue
+        location = event['Geographic Location'].dropna().iloc[0] if event['Geographic Location'].notna().any() else 'Unknown'
+        # Captain Size (e.g. "Under 6'") is the draft theme for each team, when present
+        sizes = {}
+        for cap in totals.index:
+            cs = event[event['Team'] == cap]['Captain Size'].dropna()
+            if len(cs) > 0:
+                sizes[cap] = str(cs.iloc[0])
+        winner = totals.index[0]
+        runner_up = totals.index[1] if len(totals) >= 2 else None
+        margin = float(totals.iloc[0] - totals.iloc[1]) if len(totals) >= 2 else 0.0
+        results.append({
+            'fbc': int(fbc),
+            'location': location,
+            'teams': [(cap, float(pts)) for cap, pts in totals.items()],
+            'sizes': sizes,
+            'winner': winner,
+            'loser': runner_up,
+            'margin': margin,
+            'num_teams': len(totals),
+            'tie': margin == 0.0 and len(totals) >= 2,
+        })
+    return results
+
+
 def prepare_data_context(df, question, cups_df=None):
     """Prepare relevant FBC data context based on the question."""
     # Get all players and courses for reference
@@ -829,6 +910,15 @@ def prepare_data_context(df, question, cups_df=None):
         'group record', 'together as partners', 'any combination of', 'when any of',
         'among these players', 'between these players', 'within this group'
     ]) and is_doubles_question
+
+    # Check if question is about team captains, team scores, or margins of victory
+    is_team_margin_question = any(phrase in question_lower for phrase in [
+        'captain', 'captains', 'captained', 'margin', 'margins', 'biggest win',
+        'closest', 'blowout', 'team score', 'team scores', 'team total', 'team totals',
+        'team points', 'final score', 'won by', 'beat by', 'lost by', 'point spread',
+        'led their team', 'led his team', 'led the team', 'winning team', 'losing team',
+        'team result', 'team results', 'team standings', 'how much did', 'dominant'
+    ])
 
     # Check if question is about individual FBC performance (per-player, per-event)
     is_performance_question = any(phrase in question_lower for phrase in [
@@ -1093,6 +1183,60 @@ def prepare_data_context(df, question, cups_df=None):
         context_parts.append(f"\n  *** IMPORTANT: The question asks about DOUBLES matches. Use the DOUBLES ONLY LEADERBOARD above. ***")
         context_parts.append(f"  *** Doubles matches are where 'Singles/Doubles' column equals 'Doubles' ***")
 
+    # Team results, captains, and margins of victory (derived from the 'Team' column,
+    # which names each team after its captain). Always include the compact summary so
+    # Claude can answer captain / margin / team-score questions for any event.
+    team_results = get_fbc_team_results(df)
+    if team_results:
+        context_parts.append(f"\n\nTEAM RESULTS, CAPTAINS & MARGINS OF VICTORY:")
+        context_parts.append("  (Each FBC is a team event. The 'Team' is named after its CAPTAIN.")
+        context_parts.append("   A team's score = total Points earned by its players. The winning captain's")
+        context_parts.append("   team has the most points; margin of victory = winner's points minus runner-up's.)")
+        # Sort the summary by margin so 'biggest/closest margin' questions are easy to read
+        for r in sorted(team_results, key=lambda x: x['margin'], reverse=True):
+            scores = ', '.join(f"{cap} {pts:.1f}" for cap, pts in r['teams'])
+            if r['tie']:
+                outcome = f"TIED at {r['teams'][0][1]:.1f} (no margin)"
+            else:
+                outcome = f"won by {r['winner']} over {r['loser']} by {r['margin']:.1f} pts"
+            multi = f" [{r['num_teams']} teams]" if r['num_teams'] > 2 else ""
+            context_parts.append(f"    FBC {r['fbc']} ({r['location']}): {outcome}{multi} | team scores: {scores}")
+
+        # Detailed roster for a specifically mentioned event or team/margin questions
+        detail_fbc = fbc_num if fbc_num is not None else None
+        if detail_fbc is not None:
+            detail = [r for r in team_results if r['fbc'] == detail_fbc]
+            for r in detail:
+                context_parts.append(f"\n  FBC {r['fbc']} TEAM BREAKDOWN ({r['location']}):")
+                for cap, pts in r['teams']:
+                    size = f" — draft theme: {r['sizes'][cap]}" if cap in r['sizes'] else ""
+                    tag = " (WINNING CAPTAIN)" if cap == r['winner'] and not r['tie'] else ""
+                    context_parts.append(f"    Captain {cap}: {pts:.1f} pts{tag}{size}")
+                    roster = df[(df['FBC'] == r['fbc']) & (df['Team'] == cap)]
+                    members = sorted(set(roster['Player 1'].dropna()) |
+                                     set(roster[roster['Player 2'].notna()]['Player 2'].dropna()))
+                    members = [m for m in members if isinstance(m, str)]
+                    if members:
+                        context_parts.append(f"      Roster: {', '.join(members)}")
+
+        if is_team_margin_question:
+            max_margin = max(r['margin'] for r in team_results)
+            biggest = [r for r in team_results if abs(r['margin'] - max_margin) < 1e-9]
+            decided = [r for r in team_results if not r['tie']]
+            closest = min(decided, key=lambda x: x['margin']) if decided else None
+            context_parts.append(f"\n  *** IMPORTANT: The question is about CAPTAINS / TEAM SCORES / MARGIN OF VICTORY. ***")
+            context_parts.append(f"  *** Use the TEAM RESULTS section above. The 'Team' value is the CAPTAIN's name. ***")
+            if len(biggest) == 1:
+                b = biggest[0]
+                context_parts.append(f"  *** Biggest margin of victory: FBC {b['fbc']} — captain {b['winner']} "
+                                     f"won by {b['margin']:.1f} pts ({b['teams'][0][1]:.1f} to {b['teams'][1][1]:.1f}). ***")
+            else:
+                tied = '; '.join(f"FBC {b['fbc']} (captain {b['winner']}, {b['teams'][0][1]:.1f}-{b['teams'][1][1]:.1f})" for b in biggest)
+                context_parts.append(f"  *** Biggest margin of victory: a TIE at {max_margin:.1f} pts between {tied}. ***")
+            if closest is not None:
+                context_parts.append(f"  *** Closest finish: FBC {closest['fbc']} — captain {closest['winner']} "
+                                     f"won by just {closest['margin']:.1f} pts. ***")
+
     # Add Cups data if available and relevant
     if cups_df is not None and (is_cups_question or mentioned_players):
         context_parts.append(f"\n\nCUP CHAMPIONSHIPS DATA:")
@@ -1186,6 +1330,18 @@ PLAYER NAME DISAMBIGUATION - TWO CONNOLLYS:
 - If the user asks about "Rick Connolly", "Rick", "Connolly R", or "R. Connolly", use the "R. Connolly" data (Rick)
 - When presenting stats for either Connolly, always clarify which one you mean (e.g., "Connolly (Brett)" or "R. Connolly (Rick)")
 - If both Connollys appear in a leaderboard or result set, label them clearly so the user can tell them apart
+
+TEAM CAPTAINS, TEAM SCORES & MARGINS OF VICTORY:
+- Each FBC is a team competition. Every team is CAPTAINED by a player and is NAMED AFTER that captain
+  (the "Team" value in the data IS the captain's name, e.g. team "Delneky" was captained by Delneky)
+- The TEAM RESULTS, CAPTAINS & MARGINS OF VICTORY section gives, for every FBC event: each team's
+  total points, which captain won, and the margin of victory (winner's points minus runner-up's points)
+- Use this section for questions about captains, "which captain led their team to victory", team scores,
+  team point totals, biggest/smallest margin of victory, blowouts, closest finishes, and who beat whom by how much
+- A team's score = the sum of Points earned by all players on that team that event
+- When a specific FBC is mentioned, a TEAM BREAKDOWN with each captain's roster is also provided
+- Most FBCs have exactly 2 teams; a few have 3 (noted with "[N teams]") — for those, the margin shown is winner minus runner-up
+- Do NOT say captain or margin data is unavailable — it is in the TEAM RESULTS section
 
 For CUP questions: A "cup win" means the player was on the winning TEAM for that FBC event. This is different
 from individual match wins. The Cups data shows team championship results.
