@@ -120,21 +120,82 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
+_FBC_COL_PATTERN = re.compile(r'^FBC\s+(\d+)$')
+
+
+def _fbc_columns(df):
+    """Return FBC column names from a DataFrame, ordered by cup number."""
+    matches = [(int(_FBC_COL_PATTERN.match(c).group(1)), c)
+               for c in df.columns if isinstance(c, str) and _FBC_COL_PATTERN.match(c)]
+    matches.sort(key=lambda x: x[0])
+    return matches
+
+
 @st.cache_data
 def load_cups_data():
     """Load and process the Cups data showing which players won each cup."""
-    cups_raw = pd.read_excel('FBC_Data.xlsx', sheet_name='Cups')
+    cups_raw = pd.read_excel('FBC_Data.xlsx', sheet_name='Cups', header=None)
 
-    # The data starts at row 1 (0-indexed), with headers in row 0
-    # Column 1 is Player, columns 2-13 are FBC 1-12, then Total, Played, %, Lost
-    cups_df = cups_raw.iloc[1:31].copy()  # Rows 1-30 contain player data
-    cups_df.columns = ['Drop', 'Player', 'FBC 1', 'FBC 2', 'FBC 3', 'FBC 4', 'FBC 5', 'FBC 6',
-                       'FBC 7', 'FBC 8', 'FBC 9', 'FBC 10', 'FBC 11', 'FBC 12',
-                       'Total', 'Played', 'Win%', 'Lost']
-    cups_df = cups_df.drop(columns=['Drop'])
-    cups_df = cups_df[cups_df['Player'].notna()]
+    # Find the header row by locating the cell whose value is 'Player'.
+    header_row_idx = None
+    player_col_idx = None
+    for r in range(cups_raw.shape[0]):
+        for c in range(cups_raw.shape[1]):
+            cell = cups_raw.iat[r, c]
+            if isinstance(cell, str) and cell.strip() == 'Player':
+                header_row_idx, player_col_idx = r, c
+                break
+        if header_row_idx is not None:
+            break
+    if header_row_idx is None:
+        raise ValueError("Could not find 'Player' header in Cups sheet")
 
-    # Convert Win% to float
+    # Map header cells in that row to the source column indices we care about.
+    fbc_cols = []  # (cup_number, source_col_idx)
+    total_col = played_col = pct_col = lost_col = None
+    for c in range(cups_raw.shape[1]):
+        cell = cups_raw.iat[header_row_idx, c]
+        if not isinstance(cell, str):
+            continue
+        s = cell.strip()
+        m = _FBC_COL_PATTERN.match(s)
+        if m:
+            fbc_cols.append((int(m.group(1)), c))
+        elif s == 'Total':
+            total_col = c
+        elif s == 'Played':
+            played_col = c
+        elif s == '%':
+            pct_col = c
+        elif s == 'Lost':
+            lost_col = c
+    fbc_cols.sort(key=lambda x: x[0])
+
+    # Walk rows below the header; stop at the first blank, 'Total', or note row.
+    player_rows = []
+    for r in range(header_row_idx + 1, cups_raw.shape[0]):
+        player_val = cups_raw.iat[r, player_col_idx]
+        if not isinstance(player_val, str) or not player_val.strip():
+            break
+        name = player_val.strip()
+        if name.lower() == 'total':
+            break
+        fbc_vals = [cups_raw.iat[r, src_c] for _, src_c in fbc_cols]
+        if not fbc_vals or all(pd.isna(v) for v in fbc_vals):
+            break  # note / descriptive row with no per-cup data
+
+        row_dict = {'Player': name}
+        for num, src_c in fbc_cols:
+            row_dict[f'FBC {num}'] = cups_raw.iat[r, src_c]
+        row_dict['Total'] = cups_raw.iat[r, total_col] if total_col is not None else None
+        row_dict['Played'] = cups_raw.iat[r, played_col] if played_col is not None else None
+        row_dict['Win%'] = cups_raw.iat[r, pct_col] if pct_col is not None else None
+        row_dict['Lost'] = cups_raw.iat[r, lost_col] if lost_col is not None else None
+        player_rows.append(row_dict)
+
+    columns = ['Player'] + [f'FBC {n}' for n, _ in fbc_cols] + ['Total', 'Played', 'Win%', 'Lost']
+    cups_df = pd.DataFrame(player_rows, columns=columns)
+
     cups_df['Win%'] = pd.to_numeric(cups_df['Win%'], errors='coerce')
     cups_df['Total'] = pd.to_numeric(cups_df['Total'], errors='coerce')
     cups_df['Played'] = pd.to_numeric(cups_df['Played'], errors='coerce')
@@ -144,6 +205,7 @@ def load_cups_data():
 
 def get_cups_summary(cups_df):
     """Get summary statistics about cup wins."""
+    fbc_cols = _fbc_columns(cups_df)
     summary = []
     for _, row in cups_df.iterrows():
         player = row['Player']
@@ -153,12 +215,12 @@ def get_cups_summary(cups_df):
 
         # Count individual cup results
         cup_results = []
-        for i in range(1, 13):
-            result = row.get(f'FBC {i}', 'X')
+        for num, col in fbc_cols:
+            result = row.get(col, 'X')
             if result == 1 or result == '1':
-                cup_results.append(f"FBC {i}: Won")
+                cup_results.append(f"FBC {num}: Won")
             elif result == 0 or result == '0':
-                cup_results.append(f"FBC {i}: Lost")
+                cup_results.append(f"FBC {num}: Lost")
             # X means didn't participate
 
         summary.append({
@@ -1295,8 +1357,8 @@ def prepare_data_context(df, question, cups_df=None):
                 if len(player_cup_data) > 0:
                     row = player_cup_data.iloc[0]
                     context_parts.append(f"\n  {player.upper()}'S CUP HISTORY:")
-                    for fbc_num in range(1, 13):
-                        result = row.get(f'FBC {fbc_num}', 'X')
+                    for fbc_num, col in _fbc_columns(cups_df):
+                        result = row.get(col, 'X')
                         if result == 1 or result == '1':
                             context_parts.append(f"    FBC {fbc_num}: WON (on winning team)")
                         elif result == 0 or result == '0':
@@ -2005,10 +2067,9 @@ def main():
             display_df['Win%'] = display_df['Win%'].apply(lambda x: f"{x:.1%}" if pd.notna(x) else "")
 
             # Show the table
+            fbc_col_names = [c for _, c in _fbc_columns(display_df)]
             st.dataframe(
-                display_df[['Player', 'FBC 1', 'FBC 2', 'FBC 3', 'FBC 4', 'FBC 5', 'FBC 6',
-                           'FBC 7', 'FBC 8', 'FBC 9', 'FBC 10', 'FBC 11', 'FBC 12',
-                           'Total', 'Played', 'Win%']],
+                display_df[['Player'] + fbc_col_names + ['Total', 'Played', 'Win%']],
                 hide_index=True,
                 use_container_width=True
             )
