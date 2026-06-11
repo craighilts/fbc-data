@@ -196,10 +196,17 @@ def load_cups_data():
     columns = ['Player'] + [f'FBC {n}' for n, _ in fbc_cols] + ['Total', 'Played', 'Win%', 'Lost']
     cups_df = pd.DataFrame(player_rows, columns=columns)
 
-    cups_df['Win%'] = pd.to_numeric(cups_df['Win%'], errors='coerce')
-    cups_df['Total'] = pd.to_numeric(cups_df['Total'], errors='coerce')
-    cups_df['Played'] = pd.to_numeric(cups_df['Played'], errors='coerce')
-    cups_df['Lost'] = pd.to_numeric(cups_df['Lost'], errors='coerce')
+    # Derive Total/Played/Lost/Win% from the per-cup 1/0/X cells rather than trusting
+    # the sheet's summary columns: those are Excel formulas, and their cached values
+    # disappear whenever the file is saved by a tool other than Excel (reading them
+    # then yields NaN). The per-cup cells are literal values and always reliable.
+    fbc_names = [f'FBC {n}' for n, _ in fbc_cols]
+    def _count(row, accepted):
+        return sum(1 for c in fbc_names if row[c] in accepted)
+    cups_df['Total'] = cups_df.apply(lambda r: _count(r, (1, '1')), axis=1)
+    cups_df['Lost'] = cups_df.apply(lambda r: _count(r, (0, '0')), axis=1)
+    cups_df['Played'] = cups_df['Total'] + cups_df['Lost']
+    cups_df['Win%'] = (cups_df['Total'] / cups_df['Played'].replace(0, pd.NA)).astype(float)
 
     return cups_df
 
@@ -976,6 +983,207 @@ def get_cup_results_table(df):
     return pd.DataFrame(rows)
 
 
+@st.cache_data
+def get_streak_records(df):
+    """Compute per-player match streaks (win / unbeaten / losing / current).
+
+    Matches are ordered by FBC event first, then Date and match number — FBC number is
+    the reliable event sequence (rain-delayed makeup matches, like FBC 8's, can carry
+    dates later than the following event, and date typos shouldn't scramble streaks).
+    Returns a dict with 'win', 'unbeaten', 'loss' (each a list sorted by streak length)
+    and 'current' (active streaks for players who played the most recent event).
+    """
+    work = df[df['FBC'].notna()].copy()
+    work['_mn'] = pd.to_numeric(work['Match #'], errors='coerce').fillna(999)
+    work = work.sort_values(['FBC', 'Date', '_mn'])
+    latest_fbc = int(work['FBC'].max())
+
+    # Build each player's chronological result sequence: (result, fbc)
+    sequences = {}
+    for _, row in work.iterrows():
+        res = 'W' if row['W'] == 1 else ('T' if row['T'] == 1 else 'L')
+        fbc = int(row['FBC'])
+        for p in [row['Player 1'], row.get('Player 2')]:
+            if isinstance(p, str):
+                sequences.setdefault(p, []).append((res, fbc))
+
+    def longest_run(seq, accept):
+        """Longest consecutive run of results satisfying accept(); returns (len, start_fbc, end_fbc)."""
+        best = (0, None, None)
+        cur_len, cur_start = 0, None
+        for res, fbc in seq:
+            if accept(res):
+                if cur_len == 0:
+                    cur_start = fbc
+                cur_len += 1
+                if cur_len > best[0]:
+                    best = (cur_len, cur_start, fbc)
+            else:
+                cur_len = 0
+        return best
+
+    win_list, unbeaten_list, loss_list, current_list = [], [], [], []
+    for player, seq in sequences.items():
+        for target, accept in [(win_list, lambda r: r == 'W'),
+                               (unbeaten_list, lambda r: r != 'L'),
+                               (loss_list, lambda r: r == 'L')]:
+            length, start, end = longest_run(seq, accept)
+            if length > 0:
+                span = f"FBC {start}" if start == end else f"FBC {start}–{end}"
+                target.append({'Player': player, 'Streak': length, 'Span': span})
+
+        # Current (active) streak: trailing run of same result type — only meaningful
+        # for players who actually played the most recent event
+        if seq[-1][1] == latest_fbc:
+            last_res = seq[-1][0]
+            cur = 0
+            for res, _ in reversed(seq):
+                if res == last_res:
+                    cur += 1
+                else:
+                    break
+            label = {'W': 'Won', 'L': 'Lost', 'T': 'Tied'}[last_res]
+            current_list.append({'Player': player, 'Streak': f"{label} last {cur}", 'Length': cur, 'Type': last_res})
+
+    win_list.sort(key=lambda x: x['Streak'], reverse=True)
+    unbeaten_list.sort(key=lambda x: x['Streak'], reverse=True)
+    loss_list.sort(key=lambda x: x['Streak'], reverse=True)
+    current_list.sort(key=lambda x: x['Length'], reverse=True)
+    return {'win': win_list, 'unbeaten': unbeaten_list, 'loss': loss_list, 'current': current_list}
+
+
+@st.cache_data
+def get_biggest_match_wins(df):
+    """Most lopsided match-play wins, parsed from 'Result' values like '8&7'."""
+    work = df[(df['FBC'].notna()) & (df['W'] == 1)].copy()
+    rows = []
+    for _, r in work.iterrows():
+        res = r.get('Result')
+        if not isinstance(res, str):
+            continue
+        m = re.match(r'^\s*(\d+)\s*&\s*(\d+)\s*$', res)
+        if not m:
+            continue
+        up, togo = int(m.group(1)), int(m.group(2))
+        winners = f"{r['Player 1']}/{r['Player 2']}" if pd.notna(r.get('Player 2')) else str(r['Player 1'])
+        if pd.notna(r.get('Opponent1')):
+            losers = f"{r['Opponent1']}/{r['Opponent2']}" if pd.notna(r.get('Opponent2')) else str(r['Opponent1'])
+        else:
+            losers = str(r.get('Singles Opponent', ''))
+        rows.append({'Margin': res.strip(), 'Winner': winners, 'Loser': losers,
+                     'FBC': int(r['FBC']), 'Format': r.get('Format', ''),
+                     '_sort': (up, togo)})
+    rows.sort(key=lambda x: x['_sort'], reverse=True)
+    for r in rows:
+        del r['_sort']
+    return rows
+
+
+@st.cache_data
+def get_consecutive_cup_wins(cups_df):
+    """Longest run of consecutive cups WON (among cups played; skipped events don't break a run)."""
+    results = []
+    fbc_cols = _fbc_columns(cups_df)
+    for _, row in cups_df.iterrows():
+        played = [(num, row[col]) for num, col in fbc_cols
+                  if row.get(col) in (0, 1, '0', '1')]
+        best, cur, best_span, cur_start = 0, 0, '', None
+        for num, val in played:
+            if val in (1, '1'):
+                if cur == 0:
+                    cur_start = num
+                cur += 1
+                if cur > best:
+                    best = cur
+                    best_span = f"FBC {cur_start}" if cur_start == num else f"FBC {cur_start}–{num}"
+            else:
+                cur = 0
+        if best > 0:
+            results.append({'Player': row['Player'], 'Consecutive Cups Won': best, 'Span': best_span})
+    return sorted(results, key=lambda x: x['Consecutive Cups Won'], reverse=True)
+
+
+@st.cache_data
+def get_perfect_events(df, min_matches=5):
+    """Players who got through an entire FBC event without losing a match."""
+    perfect = [p for p in get_all_individual_fbc_performances(df)
+               if p['Losses'] == 0 and p['Matches'] >= min_matches]
+    return sorted(perfect, key=lambda x: (x['Wins'], x['Points']), reverse=True)
+
+
+@st.cache_data
+def validate_data(df):
+    """Run structural integrity checks on the Archives data.
+
+    Catches the kinds of entry errors that have actually occurred (e.g. the FBC 8
+    makeup match that was tagged to a phantom team): one-sided matches, bad W/L/T
+    flags, extra teams in an event, players on both rosters, and opponent-name typos.
+    Returns a list of issue strings; an empty list means all checks pass.
+    """
+    issues = []
+    work = df[df['FBC'].notna()]
+
+    # 1. Every row should have exactly one of W/L/T set
+    wlt = work['W'].fillna(0) + work['L'].fillna(0) + work['T'].fillna(0)
+    for idx in work[wlt != 1].index:
+        r = work.loc[idx]
+        issues.append(f"FBC {int(r['FBC'])}: row for {r['Player 1']} ({r.get('UniqueMatchID', '?')}) "
+                      f"has W+L+T != 1")
+
+    # 2. Unusual Points earned values
+    valid_pts = {0.0, 0.5, 1.0, 2.0}
+    bad_pts = work[~work['Points earned'].fillna(-1).isin(valid_pts)]
+    for _, r in bad_pts.iterrows():
+        issues.append(f"FBC {int(r['FBC'])}: unusual Points earned ({r['Points earned']}) "
+                      f"for {r['Player 1']} ({r.get('UniqueMatchID', '?')})")
+
+    for fbc in sorted(work['FBC'].unique()):
+        event = work[work['FBC'] == fbc]
+        label = f"FBC {int(fbc)}"
+
+        # 3. Exactly two teams per event
+        teams = event['Team'].dropna().unique().tolist()
+        if len(teams) != 2:
+            issues.append(f"{label}: expected 2 teams, found {len(teams)} ({', '.join(map(str, teams))})")
+
+        # (Players CAN legitimately appear under both Team labels within an event —
+        # FBC 5 and FBC 9 had mixed-pair sessions — so no cross-team check here.)
+        roster = {}
+        for _, r in event.iterrows():
+            for p in [r['Player 1'], r.get('Player 2')]:
+                if isinstance(p, str):
+                    roster.setdefault(p, set()).add(r['Team'])
+
+        # 4. Every non-FTAS match should have rows for both teams
+        nonftas = event[event['Singles/Doubles'] != 'FTAS']
+        for mid, grp in nonftas.groupby('UniqueMatchID'):
+            if grp['Team'].nunique() < 2:
+                issues.append(f"{label}: match {mid} only has rows for one team "
+                              f"({grp['Team'].iloc[0]}) — missing the opposing row?")
+
+        # 5. Date outliers — all rows in an event should fall within ~1 year of the
+        # event's typical date (FBC 8's 13-month makeup window passes; a 2004-for-2014
+        # year typo gets flagged)
+        if event['Date'].notna().any():
+            modal_year = int(event['Date'].dt.year.mode().iloc[0])
+            stray = event[(event['Date'].dt.year - modal_year).abs() > 1]
+            for _, r in stray.iterrows():
+                issues.append(f"{label}: suspicious date {r['Date'].date()} for {r['Player 1']} "
+                              f"({r.get('UniqueMatchID', '?')}) — event is mostly {modal_year}")
+
+        # 6. Opponent names should match players who appear in this event (typo catch)
+        participants = set(roster.keys())
+        opp_names = set()
+        for col in ['Opponent1', 'Opponent2', 'Singles Opponent']:
+            if col in event.columns:
+                opp_names |= {v for v in event[col].dropna() if isinstance(v, str)}
+        for name in sorted(opp_names - participants):
+            issues.append(f"{label}: opponent name '{name}' never appears as a player this event "
+                          f"— possible misspelling")
+
+    return issues
+
+
 def prepare_data_context(df, question, cups_df=None):
     """Prepare relevant FBC data context based on the question."""
     # Get all players and courses for reference
@@ -1367,13 +1575,20 @@ def prepare_data_context(df, question, cups_df=None):
                             context_parts.append(f"    FBC {fbc_num}: Did not participate")
                     total = row.get('Total', 0)
                     played = row.get('Played', 0)
+                    total = 0 if pd.isna(total) else total
+                    played = 0 if pd.isna(played) else played
                     context_parts.append(f"    TOTAL: {int(total)} cups won out of {int(played)} played")
 
     return '\n'.join(context_parts)
 
-def ask_claude(question, df, cups_df=None):
-    """Send a question to Claude with relevant FBC data context."""
+def ask_claude(question, df, cups_df=None, history=None):
+    """Send a question to Claude with relevant FBC data context.
+
+    history is a list of (question, answer) tuples from earlier in the conversation,
+    so follow-ups like "what about in singles?" resolve against prior turns.
+    """
     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+    history = history or []
 
     # Load cups data if not provided
     if cups_df is None:
@@ -1382,8 +1597,11 @@ def ask_claude(question, df, cups_df=None):
         except Exception:
             cups_df = None
 
-    # Prepare context based on the question
-    data_context = prepare_data_context(df, question, cups_df)
+    # Prepare context based on the question. For follow-ups, include the last couple
+    # of user questions so entity extraction (players, events, courses) still finds
+    # names that were only mentioned earlier in the conversation.
+    extraction_text = ' '.join(q for q, _ in history[-2:]) + ' ' + question if history else question
+    data_context = prepare_data_context(df, extraction_text, cups_df)
 
     system_prompt = """You are an expert analyst for the FBC (Freddie B Cup), a golf match play tournament between friends.
 You have access to historical match data and should answer questions about player statistics, head-to-head records,
@@ -1398,7 +1616,10 @@ CRITICAL - SINGLES vs DOUBLES DISTINCTION:
 - When asked about "singles wins", "singles record", or "singles performance", ONLY use the SINGLES ONLY LEADERBOARD
 - When asked about "doubles wins", "doubles record", or "doubles performance", ONLY use the DOUBLES ONLY LEADERBOARD
 - When asked about overall/total stats without specifying match type, use the ALL MATCHES leaderboard
-- FTAS (Four-ball Team Alternate Shot) is a separate format - not singles or doubles
+- FTAS (Full Team Alternate Shot) is a separate format - not singles or doubles. It is a single
+  sudden-death tiebreaker hole worth 0.5 points to the winning TEAM (once). In INDIVIDUAL stats,
+  every player on the FTAS-winning team is credited 0.5 in their personal point total - that is
+  the official convention, so individual totals legitimately include that share.
 
 DOUBLES PARTNERSHIPS:
 - The DOUBLES PARTNERSHIP LEADERBOARD shows statistics for each unique pair of players who have played doubles together
@@ -1443,24 +1664,35 @@ TEAM CAPTAINS, TEAM SCORES & MARGINS OF VICTORY:
 For CUP questions: A "cup win" means the player was on the winning TEAM for that FBC event. This is different
 from individual match wins. The Cups data shows team championship results.
 
+This may be a multi-turn conversation. When the user asks a follow-up (e.g. "what about in singles?"
+or "and at FBC 10?"), resolve it against the earlier turns — the players, events, or topics they
+were just discussing.
+
 Be concise but thorough. Always cite the specific data that supports your answer."""
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1024,
-        system=system_prompt,
-        messages=[
-            {
-                "role": "user",
-                "content": f"""Here is the FBC tournament data relevant to your question:
+    # Rebuild the conversation: prior turns as plain Q/A (their data contexts are not
+    # resent), then the current question with fresh data context attached.
+    messages = []
+    for q, a in history[-6:]:
+        messages.append({"role": "user", "content": q})
+        messages.append({"role": "assistant", "content": a})
+    messages.append({
+        "role": "user",
+        "content": f"""Here is the FBC tournament data relevant to your question:
 
 {data_context}
 
 Question: {question}
 
 Please answer based on the data provided above. Cite specific statistics."""
-            }
-        ]
+    })
+
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2048,
+        # Cache the static system prompt so repeat questions in a session are cheaper/faster
+        system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+        messages=messages
     )
 
     return message.content[0].text
@@ -1677,7 +1909,7 @@ def predict_match(df, player1, player2, course=None, is_doubles=False, partner1=
     # Factor 2: Head-to-head record
     h2h = get_direct_h2h(df, player1, player2)
     if h2h['matches'] > 0:
-        h2h_pct = h2h['wins'] / h2h['matches'] if h2h['matches'] > 0 else 0.5
+        h2h_pct = (h2h['wins'] + 0.5 * h2h['ties']) / h2h['matches']
         h2h_diff = (h2h_pct - 0.5) * 40  # Weight: up to +/- 20%
         p1_score += h2h_diff
         factors.append({
@@ -1779,8 +2011,8 @@ def main():
         st.warning(f"Could not load Cups data: {e}")
 
     # Create tabs
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📊 Player Stats", "🏆 Leaderboard", "🏅 Cups",
+    tab1, tab2, tab3, tab_records, tab4, tab5, tab6 = st.tabs([
+        "📊 Player Stats", "🏆 Leaderboard", "🏅 Cups", "📜 Records",
         "⚔️ Tale of the Tape", "🎯 Match Predictor", "🤖 Ask Claude"
     ])
 
@@ -2075,6 +2307,99 @@ def main():
             )
         else:
             st.error("Cups data could not be loaded.")
+
+    with tab_records:
+        st.markdown("<h3 class='section-header'>📜 Records & Streaks</h3>", unsafe_allow_html=True)
+
+        streaks = get_streak_records(df)
+        team_results = get_fbc_team_results(df)
+
+        # Headline cup records
+        if team_results:
+            max_margin = max(r['margin'] for r in team_results)
+            biggest = [r for r in team_results if abs(r['margin'] - max_margin) < 1e-9]
+            decided = [r for r in team_results if not r['tie']]
+            closest = min(decided, key=lambda x: x['margin']) if decided else None
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                names = ' & '.join(b['winner'] for b in biggest)
+                st.markdown(f"""
+                <div class="stat-card">
+                    <div class="stat-value">{names}</div>
+                    <div class="stat-label">Biggest Cup Margin ({max_margin:.1f} pts{', tied' if len(biggest) > 1 else ''})</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col2:
+                if closest:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value">{closest['winner']}</div>
+                        <div class="stat-label">Closest Cup (by {closest['margin']:.1f} at FBC {closest['fbc']})</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            with col3:
+                if streaks['win']:
+                    top_streak = streaks['win'][0]
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value">{top_streak['Player']}</div>
+                        <div class="stat-label">Longest Win Streak ({top_streak['Streak']} matches, {top_streak['Span']})</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+        # Streak tables
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("<h4 class='section-header'>🔥 Longest Win Streaks</h4>", unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(streaks['win'][:10]), hide_index=True, use_container_width=True)
+        with col2:
+            st.markdown("<h4 class='section-header'>🛡️ Longest Unbeaten Streaks</h4>", unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(streaks['unbeaten'][:10]), hide_index=True, use_container_width=True)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("<h4 class='section-header'>🥶 Longest Losing Streaks</h4>", unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(streaks['loss'][:10]), hide_index=True, use_container_width=True)
+        with col2:
+            st.markdown("<h4 class='section-header'>⚡ Active Streaks (entering next cup)</h4>", unsafe_allow_html=True)
+            active = [s for s in streaks['current'] if s['Length'] >= 2 and s['Type'] != 'T']
+            st.dataframe(pd.DataFrame(active[:10])[['Player', 'Streak']], hide_index=True, use_container_width=True)
+
+        # Biggest match wins
+        st.markdown("<h4 class='section-header'>🏌️ Most Lopsided Match Wins</h4>", unsafe_allow_html=True)
+        blowouts = get_biggest_match_wins(df)
+        if blowouts:
+            st.dataframe(pd.DataFrame(blowouts[:10]), hide_index=True, use_container_width=True)
+        else:
+            st.info("No match-play margins recorded.")
+
+        # Perfect events
+        st.markdown("<h4 class='section-header'>💯 Perfect Events (no losses, 5+ matches)</h4>", unsafe_allow_html=True)
+        perfect = get_perfect_events(df)
+        if perfect:
+            pdf_ = pd.DataFrame(perfect)[['Player', 'FBC', 'Location', 'Record', 'Points']]
+            st.dataframe(pdf_, hide_index=True, use_container_width=True)
+        else:
+            st.info("Nobody has finished an event unbeaten (5+ matches) — yet.")
+
+        # Consecutive cups + best partnerships
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("<h4 class='section-header'>🏆 Most Consecutive Cups Won</h4>", unsafe_allow_html=True)
+            if cups_df is not None:
+                consec = get_consecutive_cup_wins(cups_df)
+                st.dataframe(pd.DataFrame(consec[:10]), hide_index=True, use_container_width=True)
+            else:
+                st.info("Cups data unavailable.")
+        with col2:
+            st.markdown("<h4 class='section-header'>👥 Best Partnerships (min 5 matches)</h4>", unsafe_allow_html=True)
+            partnerships = [p for p in get_all_partnership_stats(df) if p['Matches'] >= 5]
+            partnerships.sort(key=lambda x: (x['Win%'], x['Matches']), reverse=True)
+            if partnerships:
+                pp = pd.DataFrame(partnerships[:10])[['Partnership', 'Record', 'Win%', 'Matches']]
+                pp['Win%'] = pp['Win%'].apply(format_pct)
+                st.dataframe(pp, hide_index=True, use_container_width=True)
 
     with tab4:
         st.markdown("<h3 class='section-header'>⚔️ Tale of the Tape</h3>", unsafe_allow_html=True)
@@ -2409,29 +2734,28 @@ def main():
 
         st.markdown("""
         Ask any question about FBC tournament data - player stats, head-to-head records,
-        course performance, historical trends, and more!
+        course performance, historical trends, and more! **Follow-up questions work** —
+        Claude remembers the conversation (e.g. ask about a player, then "what about in singles?").
         """)
 
         # Initialize session state
+        if 'claude_history' not in st.session_state:
+            st.session_state.claude_history = []  # list of {'q': ..., 'a': ...}
         if 'claude_question' not in st.session_state:
             st.session_state.claude_question = ""
         if 'submit_question' not in st.session_state:
             st.session_state.submit_question = False
-        if 'claude_response' not in st.session_state:
-            st.session_state.claude_response = None
-        if 'last_question' not in st.session_state:
-            st.session_state.last_question = ""
 
         # Example questions
         st.markdown("**Try these example questions:**")
 
         example_questions = [
             "Who has won the most cups?",
-            "Which doubles partnership has the most wins?",
+            "Which captain won by the biggest margin of victory?",
             "What's Hilts and Lynch's record as partners?",
             "Who has the most singles wins?",
             "Who had the most points at FBC 11?",
-            "Who are the best doubles teams in FBC history?"
+            "What was the closest cup ever?"
         ]
 
         # Create columns for example question buttons
@@ -2445,63 +2769,57 @@ def main():
 
         st.markdown("---")
 
+        # Conversation so far (renders Claude's markdown natively)
+        for turn in st.session_state.claude_history:
+            with st.chat_message("user"):
+                st.markdown(turn['q'])
+            with st.chat_message("assistant"):
+                st.markdown(turn['a'])
+
         # Form for question submission (Enter key or button both work)
-        with st.form("claude_question_form", clear_on_submit=False):
+        in_conversation = len(st.session_state.claude_history) > 0
+        with st.form("claude_question_form", clear_on_submit=True):
             user_question = st.text_input(
-                "Your question:",
-                value=st.session_state.claude_question,
-                placeholder="e.g., Who has the best overall win percentage?",
+                "Your question:" if not in_conversation else "Ask a follow-up:",
+                placeholder="e.g., Who has the best overall win percentage?" if not in_conversation
+                            else "e.g., What about in doubles?",
                 key="question_input"
             )
             form_submitted = st.form_submit_button("Ask Claude", type="primary", use_container_width=True)
 
-        # Determine if we should submit (form submitted or auto-submit from example button)
-        should_submit = form_submitted or st.session_state.submit_question
-
-        # Reset the auto-submit flag
-        if st.session_state.submit_question:
+        # Resolve what to ask (typed question, or auto-submit from an example button)
+        question_to_ask = None
+        if form_submitted:
+            if user_question.strip():
+                question_to_ask = user_question.strip()
+            else:
+                st.warning("Please enter a question.")
+        elif st.session_state.submit_question:
             st.session_state.submit_question = False
+            question_to_ask = st.session_state.claude_question
 
-        # Get the question to use (form value on form submit, session state on example button)
-        question_to_ask = user_question if form_submitted else st.session_state.claude_question
-
-        # Keep session state in sync
-        if form_submitted and user_question:
-            st.session_state.claude_question = user_question
-
-        if should_submit and question_to_ask.strip():
-            # Check if API key is configured
+        if question_to_ask:
             if "ANTHROPIC_API_KEY" not in st.secrets:
                 st.error("Anthropic API key not configured. Please add ANTHROPIC_API_KEY to your Streamlit secrets.")
             else:
+                with st.chat_message("user"):
+                    st.markdown(question_to_ask)
                 with st.spinner("Claude is analyzing the FBC data..."):
                     try:
-                        # Get response from Claude (data filtering happens inside)
-                        response = ask_claude(question_to_ask, df, cups_df)
-                        st.session_state.claude_response = response
-                        st.session_state.last_question = question_to_ask
-
+                        hist = [(t['q'], t['a']) for t in st.session_state.claude_history]
+                        response = ask_claude(question_to_ask, df, cups_df, history=hist)
+                        st.session_state.claude_history.append({'q': question_to_ask, 'a': response})
+                        st.rerun()
                     except anthropic.AuthenticationError:
                         st.error("Invalid API key. Please check your ANTHROPIC_API_KEY in Streamlit secrets.")
-                        st.session_state.claude_response = None
                     except Exception as e:
                         st.error(f"Error getting response from Claude: {str(e)}")
-                        st.session_state.claude_response = None
-        elif should_submit:
-            st.warning("Please enter a question.")
 
-        # Display the response (persists across reruns)
-        if st.session_state.claude_response and st.session_state.last_question:
-            st.markdown("---")
-            st.markdown(f"**Question:** {st.session_state.last_question}")
-            st.markdown("**Claude's Answer:**")
-            st.markdown(f"""
-            <div style="background: white; padding: 1.5rem 2rem; border-radius: 12px;
-                        box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(27,77,62,0.06);
-                        border-top: 3px solid {COLORS['primary']}; margin-top: 1rem;">
-                {st.session_state.claude_response}
-            </div>
-            """, unsafe_allow_html=True)
+        # Reset button (only shown mid-conversation)
+        if st.session_state.claude_history:
+            if st.button("🗑️ Start a new conversation", key="clear_chat"):
+                st.session_state.claude_history = []
+                st.rerun()
 
         # Info about API key setup
         with st.expander("How to set up your API key"):
@@ -2519,6 +2837,21 @@ def main():
 
             Get your API key at: https://console.anthropic.com/
             """)
+
+    # Data health check — surfaces entry errors (one-sided matches, phantom teams,
+    # name typos) so they get caught right after new FBC data is entered.
+    st.markdown("---")
+    try:
+        issues = validate_data(df)
+        if issues:
+            with st.expander(f"🩺 Data Health: {len(issues)} issue(s) found — click to review", expanded=False):
+                for issue in issues:
+                    st.warning(issue)
+        else:
+            st.caption("🩺 Data health: all integrity checks pass "
+                       "(two-sided matches, valid W/L/T, two teams per event, no name mismatches).")
+    except Exception as e:
+        st.caption(f"🩺 Data health check could not run: {e}")
 
 if __name__ == "__main__":
     main()
