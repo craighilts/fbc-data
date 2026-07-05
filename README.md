@@ -118,11 +118,24 @@ totals and margins — do not worry that the per-player rows appear to "overcoun
 FBC Data & Apps/
 ├── app.py               # Main Streamlit app
 ├── FBC_Data.xlsx        # All match data (edit this to update stats)
+├── fbc13-scoring.jsx    # FBC 13 live scoring app (React source)
+├── fbc13-worker.js      # Generated Cloudflare Worker — the deployed scoring app
+├── fbc13-build/         # Build tooling for the worker (see FBC13-DEPLOY.md)
+├── FBC13-DEPLOY.md      # How to deploy/update the scoring app
 ├── requirements.txt     # Python dependencies
 ├── README.md            # This file
 └── .streamlit/
     └── secrets.toml     # API key (not committed to git)
 ```
+
+## FBC 13 Live Scoring App
+
+`fbc13-scoring.jsx` is a mobile scoring app for the October 2–3, 2026 event
+(PGA Frisco). It deploys as a Cloudflare Worker (`fbc13-worker.js`) with a D1
+database for the shared scoreboard — **not** as a claude.ai artifact (public
+artifacts have no shared storage and require sign-in; that's what sank the
+Old Barnwell test run). See **FBC13-DEPLOY.md** for deploy, testing, and
+update instructions. Its admin CSV export matches the Archives format below.
 
 ---
 

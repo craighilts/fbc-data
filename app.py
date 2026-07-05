@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
 import re
 import anthropic
 
@@ -131,8 +132,15 @@ def _fbc_columns(df):
     return matches
 
 
+def _data_file_mtime():
+    """Modification time of the data file — passed to cached loaders so the
+    st.cache_data key changes (and the cache busts) when the Excel is edited
+    while the app is running."""
+    return os.path.getmtime('FBC_Data.xlsx')
+
+
 @st.cache_data
-def load_cups_data():
+def _load_cups_data_cached(file_mtime):
     """Load and process the Cups data showing which players won each cup."""
     cups_raw = pd.read_excel('FBC_Data.xlsx', sheet_name='Cups', header=None)
 
@@ -210,6 +218,11 @@ def load_cups_data():
 
     return cups_df
 
+
+def load_cups_data():
+    return _load_cups_data_cached(_data_file_mtime())
+
+
 def get_cups_summary(cups_df):
     """Get summary statistics about cup wins."""
     fbc_cols = _fbc_columns(cups_df)
@@ -241,7 +254,7 @@ def get_cups_summary(cups_df):
     return sorted(summary, key=lambda x: x['Cups Won'], reverse=True)
 
 @st.cache_data
-def load_data():
+def _load_data_cached(file_mtime):
     """Load and process the FBC data."""
     df = pd.read_excel('FBC_Data.xlsx', sheet_name='Archives')
 
@@ -258,6 +271,11 @@ def load_data():
         )
 
     return df
+
+
+def load_data():
+    return _load_data_cached(_data_file_mtime())
+
 
 def get_player_stats(df, player):
     """Calculate career stats for a player."""
@@ -681,29 +699,12 @@ def get_leaderboard(df):
     return agg[['Player', 'Points', 'Record', 'Win%', 'Matches', 'Events', 'Pts/Event']].sort_values('Points', ascending=False).reset_index(drop=True)
 
 def extract_fbc_number(question):
-    """Extract FBC event number from a question if mentioned."""
-    import re
-    # Match patterns like "FBC 11", "FBC11", "fbc 11", "FBC XI", etc.
-    patterns = [
-        r'fbc\s*(\d+)',  # FBC 11, FBC11
-        r'fbc\s*(xi+|iv|v?i{0,3})\b',  # Roman numerals
-    ]
-    question_lower = question.lower()
-    for pattern in patterns:
-        match = re.search(pattern, question_lower)
-        if match:
-            num = match.group(1)
-            # Convert roman numerals if needed
-            roman_map = {'i': 1, 'ii': 2, 'iii': 3, 'iv': 4, 'v': 5,
-                        'vi': 6, 'vii': 7, 'viii': 8, 'ix': 9, 'x': 10,
-                        'xi': 11, 'xii': 12, 'xiii': 13}
-            if num in roman_map:
-                return roman_map[num]
-            try:
-                return int(num)
-            except ValueError:
-                continue
-    return None
+    """Extract FBC event number from a question if mentioned (e.g. 'FBC 11', 'FBC11').
+
+    FBC events are referred to by arabic numerals only.
+    """
+    match = re.search(r'fbc\s*(\d+)', question.lower())
+    return int(match.group(1)) if match else None
 
 def extract_player_names(question, all_players):
     """Extract player names mentioned in a question.
@@ -1111,6 +1112,13 @@ def get_perfect_events(df, min_matches=5):
     return sorted(perfect, key=lambda x: (x['Wins'], x['Points']), reverse=True)
 
 
+# Matches the date-outlier check should accept despite falling outside their
+# event's normal window: long-delayed makeup matches that really were played
+# years later. FBC8-S-Hilts-Mangold is the FBC 8 makeup finally played
+# 2026-06-20 at Old Barnwell (Hilts d. Mangold 5&4).
+DATE_CHECK_EXEMPT_MATCHES = {'FBC8-S-Hilts-Mangold'}
+
+
 @st.cache_data
 def validate_data(df):
     """Run structural integrity checks on the Archives data.
@@ -1166,7 +1174,8 @@ def validate_data(df):
         # year typo gets flagged)
         if event['Date'].notna().any():
             modal_year = int(event['Date'].dt.year.mode().iloc[0])
-            stray = event[(event['Date'].dt.year - modal_year).abs() > 1]
+            stray = event[((event['Date'].dt.year - modal_year).abs() > 1) &
+                          (~event['UniqueMatchID'].isin(DATE_CHECK_EXEMPT_MATCHES))]
             for _, r in stray.iterrows():
                 issues.append(f"{label}: suspicious date {r['Date'].date()} for {r['Player 1']} "
                               f"({r.get('UniqueMatchID', '?')}) — event is mostly {modal_year}")
@@ -1688,7 +1697,7 @@ Please answer based on the data provided above. Cite specific statistics."""
     })
 
     message = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=2048,
         # Cache the static system prompt so repeat questions in a session are cheaper/faster
         system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
@@ -2298,8 +2307,13 @@ def main():
             # Format Win% as percentage after sorting
             display_df['Win%'] = display_df['Win%'].apply(lambda x: f"{x:.1%}" if pd.notna(x) else "")
 
-            # Show the table
+            # Show the table. Cast the per-cup 1/0/X cells to uniform strings —
+            # mixed int/str columns fail Arrow serialization and spam the server
+            # log with a traceback on every render.
             fbc_col_names = [c for _, c in _fbc_columns(display_df)]
+            for c in fbc_col_names:
+                display_df[c] = display_df[c].map(
+                    lambda v: str(int(v)) if v in (0, 1, 0.0, 1.0) else ('' if pd.isna(v) else str(v)))
             st.dataframe(
                 display_df[['Player'] + fbc_col_names + ['Total', 'Played', 'Win%']],
                 hide_index=True,
@@ -2364,7 +2378,10 @@ def main():
         with col2:
             st.markdown("<h4 class='section-header'>⚡ Active Streaks (entering next cup)</h4>", unsafe_allow_html=True)
             active = [s for s in streaks['current'] if s['Length'] >= 2 and s['Type'] != 'T']
-            st.dataframe(pd.DataFrame(active[:10])[['Player', 'Streak']], hide_index=True, use_container_width=True)
+            if active:
+                st.dataframe(pd.DataFrame(active[:10])[['Player', 'Streak']], hide_index=True, use_container_width=True)
+            else:
+                st.info("No active streaks of 2+ matches.")
 
         # Biggest match wins
         st.markdown("<h4 class='section-header'>🏌️ Most Lopsided Match Wins</h4>", unsafe_allow_html=True)
