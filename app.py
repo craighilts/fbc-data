@@ -2099,7 +2099,7 @@ def main():
                         st.dataframe(
                             event_df,
                             hide_index=True,
-                            use_container_width=True
+                            width='stretch'
                         )
                     else:
                         st.info("No event data available.")
@@ -2112,7 +2112,7 @@ def main():
                         st.dataframe(
                             partner_df,
                             hide_index=True,
-                            use_container_width=True
+                            width='stretch'
                         )
                     else:
                         st.info("No doubles partner data available.")
@@ -2125,7 +2125,7 @@ def main():
                         st.dataframe(
                             h2h_df,
                             hide_index=True,
-                            use_container_width=True
+                            width='stretch'
                         )
                     else:
                         st.info("No head-to-head data available.")
@@ -2138,7 +2138,7 @@ def main():
                         st.dataframe(
                             course_df,
                             hide_index=True,
-                            use_container_width=True
+                            width='stretch'
                         )
                     else:
                         st.info("No course data available.")
@@ -2170,7 +2170,7 @@ def main():
         st.dataframe(
             leaderboard,
             hide_index=True,
-            use_container_width=True,
+            width='stretch',
             column_config={
                 'Rank': st.column_config.NumberColumn('Rank', width='small'),
                 'Player': st.column_config.TextColumn('Player', width='medium'),
@@ -2280,7 +2280,7 @@ def main():
                     cup_results[['FBC', 'Location', 'Winning Captain', 'Losing Captain',
                                  'Winner Total', 'Loser Total', 'Margin', 'Highest Individual']],
                     hide_index=True,
-                    use_container_width=True,
+                    width='stretch',
                 )
             except Exception as e:
                 st.warning(f"Could not build the cup results table: {e}")
@@ -2317,7 +2317,7 @@ def main():
             st.dataframe(
                 display_df[['Player'] + fbc_col_names + ['Total', 'Played', 'Win%']],
                 hide_index=True,
-                use_container_width=True
+                width='stretch'
             )
         else:
             st.error("Cups data could not be loaded.")
@@ -2366,20 +2366,20 @@ def main():
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("<h4 class='section-header'>🔥 Longest Win Streaks</h4>", unsafe_allow_html=True)
-            st.dataframe(pd.DataFrame(streaks['win'][:10]), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(streaks['win'][:10]), hide_index=True, width='stretch')
         with col2:
             st.markdown("<h4 class='section-header'>🛡️ Longest Unbeaten Streaks</h4>", unsafe_allow_html=True)
-            st.dataframe(pd.DataFrame(streaks['unbeaten'][:10]), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(streaks['unbeaten'][:10]), hide_index=True, width='stretch')
 
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("<h4 class='section-header'>🥶 Longest Losing Streaks</h4>", unsafe_allow_html=True)
-            st.dataframe(pd.DataFrame(streaks['loss'][:10]), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(streaks['loss'][:10]), hide_index=True, width='stretch')
         with col2:
             st.markdown("<h4 class='section-header'>⚡ Active Streaks (entering next cup)</h4>", unsafe_allow_html=True)
             active = [s for s in streaks['current'] if s['Length'] >= 2 and s['Type'] != 'T']
             if active:
-                st.dataframe(pd.DataFrame(active[:10])[['Player', 'Streak']], hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(active[:10])[['Player', 'Streak']], hide_index=True, width='stretch')
             else:
                 st.info("No active streaks of 2+ matches.")
 
@@ -2387,7 +2387,7 @@ def main():
         st.markdown("<h4 class='section-header'>🏌️ Most Lopsided Match Wins</h4>", unsafe_allow_html=True)
         blowouts = get_biggest_match_wins(df)
         if blowouts:
-            st.dataframe(pd.DataFrame(blowouts[:10]), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(blowouts[:10]), hide_index=True, width='stretch')
         else:
             st.info("No match-play margins recorded.")
 
@@ -2396,7 +2396,7 @@ def main():
         perfect = get_perfect_events(df)
         if perfect:
             pdf_ = pd.DataFrame(perfect)[['Player', 'FBC', 'Location', 'Record', 'Points']]
-            st.dataframe(pdf_, hide_index=True, use_container_width=True)
+            st.dataframe(pdf_, hide_index=True, width='stretch')
         else:
             st.info("Nobody has finished an event unbeaten (5+ matches) — yet.")
 
@@ -2406,7 +2406,7 @@ def main():
             st.markdown("<h4 class='section-header'>🏆 Most Consecutive Cups Won</h4>", unsafe_allow_html=True)
             if cups_df is not None:
                 consec = get_consecutive_cup_wins(cups_df)
-                st.dataframe(pd.DataFrame(consec[:10]), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(consec[:10]), hide_index=True, width='stretch')
             else:
                 st.info("Cups data unavailable.")
         with col2:
@@ -2416,7 +2416,7 @@ def main():
             if partnerships:
                 pp = pd.DataFrame(partnerships[:10])[['Partnership', 'Record', 'Win%', 'Matches']]
                 pp['Win%'] = pp['Win%'].apply(format_pct)
-                st.dataframe(pp, hide_index=True, use_container_width=True)
+                st.dataframe(pp, hide_index=True, width='stretch')
 
     with tab4:
         st.markdown("<h3 class='section-header'>⚔️ Tale of the Tape</h3>", unsafe_allow_html=True)
@@ -2523,7 +2523,7 @@ def main():
                         'Edge': tape_player1 if p1_f.get('win_pct', 0) > p2_f.get('win_pct', 0) else (tape_player2 if p2_f.get('win_pct', 0) > p1_f.get('win_pct', 0) else 'Even')
                     })
 
-                st.dataframe(pd.DataFrame(format_data), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(format_data), hide_index=True, width='stretch')
 
                 # Best/Worst Courses
                 col1, col2 = st.columns(2)
@@ -2652,7 +2652,7 @@ def main():
                             'edge': 'Edge',
                             'impact': 'Impact'
                         })
-                        st.dataframe(factors_df[['Factor', pred_p1, pred_p2, 'Edge']], hide_index=True, use_container_width=True)
+                        st.dataframe(factors_df[['Factor', pred_p1, pred_p2, 'Edge']], hide_index=True, width='stretch')
                     else:
                         st.info("Not enough historical data to analyze factors.")
             else:
@@ -2740,7 +2740,7 @@ def main():
                             'edge': 'Edge',
                             'impact': 'Impact'
                         })
-                        st.dataframe(factors_df[['Factor', f"{pred_d1_p1}/{pred_d1_p2}", f"{pred_d2_p1}/{pred_d2_p2}", 'Edge']], hide_index=True, use_container_width=True)
+                        st.dataframe(factors_df[['Factor', f"{pred_d1_p1}/{pred_d1_p2}", f"{pred_d2_p1}/{pred_d2_p2}", 'Edge']], hide_index=True, width='stretch')
                     else:
                         st.info("Not enough historical data to analyze factors.")
             else:
@@ -2779,7 +2779,7 @@ def main():
         cols = st.columns(2)
         for i, question in enumerate(example_questions):
             with cols[i % 2]:
-                if st.button(question, key=f"example_{i}", use_container_width=True):
+                if st.button(question, key=f"example_{i}", width='stretch'):
                     st.session_state.claude_question = question
                     st.session_state.submit_question = True
                     st.rerun()
@@ -2802,7 +2802,7 @@ def main():
                             else "e.g., What about in doubles?",
                 key="question_input"
             )
-            form_submitted = st.form_submit_button("Ask Claude", type="primary", use_container_width=True)
+            form_submitted = st.form_submit_button("Ask Claude", type="primary", width='stretch')
 
         # Resolve what to ask (typed question, or auto-submit from an example button)
         question_to_ask = None
