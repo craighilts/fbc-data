@@ -214,7 +214,8 @@ def _load_cups_data_cached(file_mtime):
     cups_df['Total'] = cups_df.apply(lambda r: _count(r, (1, '1')), axis=1)
     cups_df['Lost'] = cups_df.apply(lambda r: _count(r, (0, '0')), axis=1)
     cups_df['Played'] = cups_df['Total'] + cups_df['Lost']
-    cups_df['Win%'] = (cups_df['Total'] / cups_df['Played'].replace(0, pd.NA)).astype(float)
+    # NaN (not a crash) for a player with no cups played yet, e.g. a roster placeholder
+    cups_df['Win%'] = cups_df['Total'] / cups_df['Played'].where(cups_df['Played'] > 0)
 
     return cups_df
 
@@ -431,7 +432,8 @@ def get_opponent_pairs_never_partnered(df):
 
     An 'opponent pair' is any two players who appeared on opposite sides in a match:
     - Singles: Player 1 vs their Singles Opponent
-    - Doubles/FTAS: each player on one team vs each player on the opposing team
+    - Doubles: each player on one team vs each player on the opposing team
+      (FTAS rows carry no opponent columns, so the tiebreaker is not counted)
 
     Returns a list of dicts sorted by opponent match count (descending), filtered to
     only include pairs that have NEVER been doubles partners.
@@ -454,7 +456,7 @@ def get_opponent_pairs_never_partnered(df):
                 pair = tuple(sorted([p1, opponent]))
                 opponent_pair_counts[pair] += 1
         else:
-            # Doubles/FTAS: each player on one side vs each on the other
+            # Doubles: each player on one side vs each on the other (FTAS rows list no opponents)
             team = [p for p in [p1, p2] if pd.notna(p) and isinstance(p, str)]
             opponents = [p for p in [opp1, opp2] if pd.notna(p) and isinstance(p, str)]
             for t in team:
@@ -1120,12 +1122,13 @@ DATE_CHECK_EXEMPT_MATCHES = {'FBC8-S-Hilts-Mangold'}
 
 
 @st.cache_data
-def validate_data(df):
-    """Run structural integrity checks on the Archives data.
+def validate_data(df, cups_df=None):
+    """Run structural integrity checks on the Archives data (and, when given, the Cups sheet).
 
     Catches the kinds of entry errors that have actually occurred (e.g. the FBC 8
     makeup match that was tagged to a phantom team): one-sided matches, bad W/L/T
-    flags, extra teams in an event, players on both rosters, and opponent-name typos.
+    flags, extra teams in an event, players on both rosters, opponent-name typos,
+    inconsistent FTAS rows, and Cups-sheet names that don't match the Archives spelling.
     Returns a list of issue strings; an empty list means all checks pass.
     """
     issues = []
@@ -1189,6 +1192,31 @@ def validate_data(df):
         for name in sorted(opp_names - participants):
             issues.append(f"{label}: opponent name '{name}' never appears as a player this event "
                           f"— possible misspelling")
+
+    # 7. FTAS rows: every player on a side should carry the same Points earned (0.5 for
+    # the winning team, 0 for the losers). Team totals use the group mean, so a stray
+    # 0 among 0.5s would silently shave the team score.
+    ftas = work[work['Singles/Doubles'] == 'FTAS']
+    for (fbc, mid, team), grp in ftas.groupby(['FBC', 'UniqueMatchID', 'Team']):
+        if grp['Points earned'].nunique(dropna=False) > 1:
+            vals = sorted(float(v) for v in grp['Points earned'].fillna(-1).unique())
+            issues.append(f"FBC {int(fbc)}: FTAS rows for team {team} ({mid}) have mixed "
+                          f"Points earned {vals} — every player on a side should show the same value")
+
+    # 8. Cups sheet names must match the Archives spelling exactly, and every Archives
+    # player needs a Cups row — otherwise cup stats and the Ask Claude context refer to
+    # one person by two names, or leave them out.
+    if cups_df is not None and 'Player' in cups_df.columns:
+        archive_players = {p for p in pd.concat([work['Player 1'], work['Player 2']]).dropna()
+                           if isinstance(p, str)}
+        cups_players = {p.strip() for p in cups_df['Player'].dropna() if isinstance(p, str)}
+        unknown = sorted(cups_players - archive_players)
+        if unknown:
+            issues.append("Cups sheet: names not found in Archives: " + ", ".join(unknown) +
+                          " — rename to the Archives spelling")
+        missing = sorted(archive_players - cups_players)
+        if missing:
+            issues.append("Cups sheet: Archives players with no Cups row: " + ", ".join(missing))
 
     return issues
 
@@ -1566,10 +1594,14 @@ def prepare_data_context(df, question, cups_df=None):
         # Detailed cup results for mentioned players
         if mentioned_players:
             for player in mentioned_players:
-                player_cup_data = cups_df[cups_df['Player'].str.lower() == player.lower()]
+                names_lower = cups_df['Player'].str.lower()
+                player_cup_data = cups_df[names_lower == player.lower()]
                 if len(player_cup_data) == 0:
-                    # Try partial match
-                    player_cup_data = cups_df[cups_df['Player'].str.lower().str.contains(player.lower(), na=False)]
+                    # Fall back to a prefix match ("Connolly" -> "Connolly, B") before a
+                    # substring match, so "Connolly" does not pick up "R. Connolly".
+                    player_cup_data = cups_df[names_lower.str.startswith(player.lower(), na=False)]
+                if len(player_cup_data) == 0:
+                    player_cup_data = cups_df[names_lower.str.contains(player.lower(), na=False, regex=False)]
 
                 if len(player_cup_data) > 0:
                     row = player_cup_data.iloc[0]
@@ -1638,7 +1670,7 @@ DOUBLES PARTNERSHIPS:
 
 OPPONENT PAIRS NEVER PARTNERED:
 - The OPPONENT PAIRS NEVER PARTNERED leaderboard shows pairs of players who have faced each other as opponents but have NEVER been doubles partners
-- "OpponentMatches" counts every match where the two players were on opposite sides (singles: direct opponents; doubles/FTAS: on opposing teams)
+- "OpponentMatches" counts every match where the two players were on opposite sides (singles: direct opponents; doubles: on opposing teams; the FTAS tiebreaker is not counted)
 - These pairs have zero doubles matches together as partners
 - Use this when asked about "who has played the most against each other without being partners", "rivals who never teamed up", etc.
 
@@ -1698,13 +1730,19 @@ Please answer based on the data provided above. Cite specific statistics."""
 
     message = client.messages.create(
         model="claude-sonnet-5",
-        max_tokens=2048,
+        max_tokens=8000,
         # Cache the static system prompt so repeat questions in a session are cheaper/faster
         system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
         messages=messages
     )
 
-    return message.content[0].text
+    # The response is a list of content blocks; current models can return a
+    # thinking block ahead of the text, so pick the text block explicitly
+    # rather than assuming it is first.
+    text_blocks = [b.text for b in message.content if b.type == "text"]
+    if not text_blocks:
+        return "Claude returned no answer for that question. Please try rephrasing it."
+    return "\n\n".join(text_blocks)
 
 def get_direct_h2h(df, player1, player2):
     """Get direct head-to-head record between two specific players."""
@@ -1953,7 +1991,7 @@ def predict_match(df, player1, player2, course=None, is_doubles=False, partner1=
             course_diff = (p1_course['win_pct'] - p2_course['win_pct']) * 20  # Weight: up to +/- 10%
             p1_score += course_diff
             factors.append({
-                'factor': f'Course ({course[:20]}...)',
+                'factor': f"Course ({course if len(course) <= 20 else course[:20] + '…'})",
                 'p1_value': f"{p1_course['wins']}-{p1_course['losses']}-{p1_course['ties']} ({p1_course['win_pct']:.1%})",
                 'p2_value': f"{p2_course['wins']}-{p2_course['losses']}-{p2_course['ties']} ({p2_course['win_pct']:.1%})",
                 'edge': player1 if p1_course['win_pct'] > p2_course['win_pct'] else (player2 if p2_course['win_pct'] > p1_course['win_pct'] else 'Even'),
@@ -2859,7 +2897,7 @@ def main():
     # name typos) so they get caught right after new FBC data is entered.
     st.markdown("---")
     try:
-        issues = validate_data(df)
+        issues = validate_data(df, cups_df)
         if issues:
             with st.expander(f"🩺 Data Health: {len(issues)} issue(s) found — click to review", expanded=False):
                 for issue in issues:
