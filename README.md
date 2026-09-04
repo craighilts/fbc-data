@@ -9,19 +9,21 @@ A Streamlit web app for the **Freddie B Cup** — displaying historical match st
 ### First-time setup
 
 1. Make sure Python 3.10+ is installed.
-2. Create a virtual environment and install dependencies:
+2. Create a virtual environment **outside Dropbox** and install dependencies. This
+   folder syncs to Dropbox, and Dropbox's "online-only" space saving evicts thousands
+   of package files from disk, which makes every launch hang for minutes while they
+   re-download. Keep the real environment at `~/.venvs/fbc-stats` and leave a `venv`
+   symlink in this folder so the `./venv/bin/python` commands in these docs keep working:
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate        # Mac/Linux
-venv\Scripts\activate           # Windows
-
-pip install -r requirements.txt
+python3 -m venv ~/.venvs/fbc-stats
+~/.venvs/fbc-stats/bin/python -m pip install -r requirements.txt
+ln -s ~/.venvs/fbc-stats venv        # run from inside "FBC Data & Apps"
 ```
 
 3. Set up your Anthropic API key (required for the Ask Claude tab):
-   - Create a folder called `.streamlit` in the same directory as `app.py`
-   - Inside it, create a file called `secrets.toml` with:
+   - Put it in `~/.streamlit/secrets.toml` (recommended — keeps the key out of the
+     Dropbox-synced folder), or in a `.streamlit/secrets.toml` next to `app.py`:
 
 ```toml
 ANTHROPIC_API_KEY = "your-api-key-here"
@@ -33,7 +35,7 @@ Get a key at [console.anthropic.com](https://console.anthropic.com/).
 
 ```bash
 cd "FBC Data & Apps"
-streamlit run app.py
+./venv/bin/python -m streamlit run app.py
 ```
 
 The app opens in your browser at `http://localhost:8501`.
@@ -96,7 +98,7 @@ This sheet tracks which team won each FBC event. Update after each FBC:
 
 ### Player name rules
 
-Player names must be spelled **exactly the same** every time (canonical spellings: `Deoteris`,
+Player names must be spelled **exactly the same** every time (canonical spellings: `DeOteris`,
 `R. Connolly`). The app does **not** auto-correct spellings — a typo creates a new "player".
 The Data Health check at the bottom of the app flags opponent names that don't match any
 player in the event, which catches most typos.
@@ -124,8 +126,9 @@ FBC Data & Apps/
 ├── FBC13-DEPLOY.md      # How to deploy/update the scoring app
 ├── requirements.txt     # Python dependencies
 ├── README.md            # This file
+├── venv -> ~/.venvs/fbc-stats   # symlink; the real environment lives outside Dropbox
 └── .streamlit/
-    └── secrets.toml     # API key (not committed to git)
+    └── secrets.toml     # API key (optional here; ~/.streamlit/secrets.toml also works)
 ```
 
 ## FBC 13 Live Scoring App
