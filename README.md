@@ -46,6 +46,32 @@ The app opens in your browser at `http://localhost:8501`.
 
 All match data lives in **`FBC_Data.xlsx`**. The app reads this file every time it loads — no other steps needed after saving the spreadsheet.
 
+### Importing a cup with Claude (the fast path)
+
+After an event, the scoring app's Admin footer has an **Export CSV** button that writes
+the event's rows in the exact Archives layout. Hand that file to Claude in a Claude Code
+session on this repository with a prompt like:
+
+> Here is the FBC 13 export from the scoring app. Run `tools/import_cup.py` on it,
+> show me the Data Health result, then commit, push and open a pull request.
+
+`tools/import_cup.py` appends the rows to the Archives sheet, adds the `FBC 13` column
+to the Cups sheet (marking every player 1 / 0 / X, bumping Played, and extending the
+Total / Win% / Lost formulas), adds a Cups row for any first-time player, and then runs
+the app's Data Health check. It refuses to write the workbook if anything is flagged.
+It edits only the parts of the file it has to, so every other tab, formula and chart is
+untouched; Excel recalculates everything on the next open.
+
+```bash
+python tools/import_cup.py fbc13_archives_export.csv --dry-run   # report only
+python tools/import_cup.py fbc13_archives_export.csv             # update FBC_Data.xlsx
+```
+
+Export only once the scoreboard shows every match reported: unreported matches are
+simply left out, and nothing downstream can tell. Still by hand afterwards, and only
+because they live in workbook tabs the app does not read: the Handicaps column, the
+Ratings row, the Difficulty Graph row, and Captain Size on the Cups tab.
+
 ### Archives sheet — match results
 
 This is the main data sheet. Each row is one match (from one team's perspective).
