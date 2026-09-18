@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import os
 import re
+import contextlib
 import anthropic
 
 # Page config
@@ -262,6 +263,12 @@ def _load_data_cached(file_mtime):
     # Clean up the data
     df = df.dropna(subset=['Player 1'])
     df = df[df['Player 1'].apply(lambda x: isinstance(x, str))]
+
+    # Dates typed as text (rather than real Excel dates) would leave this column with
+    # mixed types and break every sort and .dt access downstream. Coerce them to NaT;
+    # validate_data reports the affected rows.
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
 
     # Derive Singles/Doubles column if missing from older data files
     if 'Singles/Doubles' not in df.columns:
@@ -1121,41 +1128,106 @@ def get_perfect_events(df, min_matches=5):
 DATE_CHECK_EXEMPT_MATCHES = {'FBC8-S-Hilts-Mangold'}
 
 
+# Values the app recognises in the Singles/Doubles column. Matching is exact and
+# case-sensitive everywhere (filters, team totals), so 'ftas' or 'singles' would be
+# scored as an ordinary match.
+VALID_MATCH_TYPES = {'Singles', 'Doubles', 'FTAS'}
+
+# Archives columns every match row needs, with the reason shown in the Data Health
+# message so the fix is obvious. All existing rows have all of these filled in.
+REQUIRED_ROW_FIELDS = [
+    ('UniqueMatchID', "pairs the two sides of a match and scores the FTAS once per team; "
+                      "blank IDs silently drop the FTAS from team totals"),
+    ('Team', "names the captain; team totals and the cup winner are computed from it"),
+    ('Date', "must be a real Excel date, not text; used to order matches and check dates"),
+    ('Geographic Location', "labels the event everywhere it appears"),
+    ('Course', "drives the By Course stats and the Match Predictor"),
+]
+
+
+@contextlib.contextmanager
+def _health_check(issues, name):
+    """Run one Data Health check; if it raises, record that instead of aborting the rest."""
+    try:
+        yield
+    except Exception as e:
+        issues.append(f"Check '{name}' could not run: {e}")
+
+
 @st.cache_data
 def validate_data(df, cups_df=None):
     """Run structural integrity checks on the Archives data (and, when given, the Cups sheet).
 
-    Catches the kinds of entry errors that have actually occurred (e.g. the FBC 8
-    makeup match that was tagged to a phantom team): one-sided matches, bad W/L/T
-    flags, extra teams in an event, players on both rosters, opponent-name typos,
-    inconsistent FTAS rows, and Cups-sheet names that don't match the Archives spelling.
+    Catches the kinds of entry errors that have actually occurred or that a dry run of
+    adding a new cup showed would go unnoticed: stray note rows, blank required columns
+    (UniqueMatchID, Team, Date, Location, Course), mis-cased Singles/Doubles values,
+    one-sided matches, bad W/L/T flags, extra teams in an event, opponent-name typos,
+    inconsistent FTAS rows, Cups-sheet names that don't match the Archives spelling, and
+    an Archives event with no matching Cups column.
+    Each check is isolated, so one failing check reports itself rather than hiding the rest.
     Returns a list of issue strings; an empty list means all checks pass.
     """
     issues = []
-    work = df[df['FBC'].notna()]
+
+    # 0. Rows with a player but no FBC number: usually a note typed into the Player 1
+    # column. Every other check skips them, but they appear as a phantom player.
+    with _health_check(issues, 'stray rows'):
+        stray = df[df['FBC'].isna() & df['Player 1'].apply(lambda x: isinstance(x, str))]
+        for _, r in stray.iterrows():
+            issues.append(f"Archives: row with Player 1 = '{r['Player 1']}' has no FBC number — "
+                          f"it shows up as a phantom player; delete the row or fill in the FBC")
+
+    work = df[df['FBC'].notna()].copy()
+    # Tolerate text in numeric columns (a typed '1' or a stray space): coerce, and let
+    # the checks below flag whatever no longer adds up.
+    for col in ['W', 'L', 'T', 'Points earned']:
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors='coerce')
+    if 'Date' in work.columns:
+        work['Date'] = pd.to_datetime(work['Date'], errors='coerce')
 
     # 1. Every row should have exactly one of W/L/T set
-    wlt = work['W'].fillna(0) + work['L'].fillna(0) + work['T'].fillna(0)
-    for idx in work[wlt != 1].index:
-        r = work.loc[idx]
-        issues.append(f"FBC {int(r['FBC'])}: row for {r['Player 1']} ({r.get('UniqueMatchID', '?')}) "
-                      f"has W+L+T != 1")
+    with _health_check(issues, 'W/L/T flags'):
+        wlt = work['W'].fillna(0) + work['L'].fillna(0) + work['T'].fillna(0)
+        for idx in work[wlt != 1].index:
+            r = work.loc[idx]
+            issues.append(f"FBC {int(r['FBC'])}: row for {r['Player 1']} ({r.get('UniqueMatchID', '?')}) "
+                          f"has W+L+T != 1")
 
     # 2. Unusual Points earned values
-    valid_pts = {0.0, 0.5, 1.0, 2.0}
-    bad_pts = work[~work['Points earned'].fillna(-1).isin(valid_pts)]
-    for _, r in bad_pts.iterrows():
-        issues.append(f"FBC {int(r['FBC'])}: unusual Points earned ({r['Points earned']}) "
-                      f"for {r['Player 1']} ({r.get('UniqueMatchID', '?')})")
+    with _health_check(issues, 'Points earned'):
+        valid_pts = {0.0, 0.5, 1.0, 2.0}
+        bad_pts = work[~work['Points earned'].fillna(-1).isin(valid_pts)]
+        for _, r in bad_pts.iterrows():
+            issues.append(f"FBC {int(r['FBC'])}: unusual Points earned ({r['Points earned']}) "
+                          f"for {r['Player 1']} ({r.get('UniqueMatchID', '?')})")
 
     for fbc in sorted(work['FBC'].unique()):
         event = work[work['FBC'] == fbc]
         label = f"FBC {int(fbc)}"
 
-        # 3. Exactly two teams per event
-        teams = event['Team'].dropna().unique().tolist()
-        if len(teams) != 2:
-            issues.append(f"{label}: expected 2 teams, found {len(teams)} ({', '.join(map(str, teams))})")
+        # 3. Required columns filled in on every row
+        with _health_check(issues, f'{label} required columns'):
+            for col, why in REQUIRED_ROW_FIELDS:
+                if col not in event.columns:
+                    continue
+                n = int(event[col].isna().sum())
+                if n:
+                    issues.append(f"{label}: {n} row(s) with blank {col} — {why}")
+
+        # 3b. Singles/Doubles must be one of the three exact values
+        with _health_check(issues, f'{label} Singles/Doubles values'):
+            bad = event.loc[~event['Singles/Doubles'].isin(VALID_MATCH_TYPES), 'Singles/Doubles']
+            for val, n in bad.fillna('(blank)').value_counts().items():
+                issues.append(f"{label}: Singles/Doubles value '{val}' on {n} row(s) — must be exactly "
+                              f"Singles, Doubles or FTAS (case-sensitive); anything else is scored as a "
+                              f"normal match, so a mis-cased FTAS counts once per player instead of once per team")
+
+        # 4. Exactly two teams per event
+        with _health_check(issues, f'{label} teams'):
+            teams = event['Team'].dropna().unique().tolist()
+            if len(teams) != 2:
+                issues.append(f"{label}: expected 2 teams, found {len(teams)} ({', '.join(map(str, teams))})")
 
         # (Players CAN legitimately appear under both Team labels within an event —
         # FBC 5 and FBC 9 had mixed-pair sessions — so no cross-team check here.)
@@ -1165,61 +1237,70 @@ def validate_data(df, cups_df=None):
                 if isinstance(p, str):
                     roster.setdefault(p, set()).add(r['Team'])
 
-        # 4. Every non-FTAS match should have rows for both teams
-        nonftas = event[event['Singles/Doubles'] != 'FTAS']
-        for mid, grp in nonftas.groupby('UniqueMatchID'):
-            if grp['Team'].nunique() < 2:
-                issues.append(f"{label}: match {mid} only has rows for one team "
-                              f"({grp['Team'].iloc[0]}) — missing the opposing row?")
+        # 5. Every non-FTAS match should have rows for both teams
+        with _health_check(issues, f'{label} match pairing'):
+            nonftas = event[event['Singles/Doubles'] != 'FTAS']
+            for mid, grp in nonftas.groupby('UniqueMatchID'):
+                if grp['Team'].nunique() < 2:
+                    issues.append(f"{label}: match {mid} only has rows for one team "
+                                  f"({grp['Team'].iloc[0]}) — missing the opposing row?")
 
-        # 5. Date outliers — all rows in an event should fall within ~1 year of the
+        # 6. Date outliers — all rows in an event should fall within ~1 year of the
         # event's typical date (FBC 8's 13-month makeup window passes; a 2004-for-2014
         # year typo gets flagged)
-        if event['Date'].notna().any():
-            modal_year = int(event['Date'].dt.year.mode().iloc[0])
-            stray = event[((event['Date'].dt.year - modal_year).abs() > 1) &
-                          (~event['UniqueMatchID'].isin(DATE_CHECK_EXEMPT_MATCHES))]
-            for _, r in stray.iterrows():
-                issues.append(f"{label}: suspicious date {r['Date'].date()} for {r['Player 1']} "
-                              f"({r.get('UniqueMatchID', '?')}) — event is mostly {modal_year}")
+        with _health_check(issues, f'{label} dates'):
+            if event['Date'].notna().any():
+                modal_year = int(event['Date'].dt.year.mode().iloc[0])
+                stray = event[((event['Date'].dt.year - modal_year).abs() > 1) &
+                              (~event['UniqueMatchID'].isin(DATE_CHECK_EXEMPT_MATCHES))]
+                for _, r in stray.iterrows():
+                    issues.append(f"{label}: suspicious date {r['Date'].date()} for {r['Player 1']} "
+                                  f"({r.get('UniqueMatchID', '?')}) — event is mostly {modal_year}")
 
-        # 6. Opponent names should match players who appear in this event (typo catch)
-        participants = set(roster.keys())
-        opp_names = set()
-        for col in ['Opponent1', 'Opponent2', 'Singles Opponent']:
-            if col in event.columns:
-                opp_names |= {v for v in event[col].dropna() if isinstance(v, str)}
-        for name in sorted(opp_names - participants):
-            issues.append(f"{label}: opponent name '{name}' never appears as a player this event "
-                          f"— possible misspelling")
+        # 7. Opponent names should match players who appear in this event (typo catch)
+        with _health_check(issues, f'{label} opponent names'):
+            participants = set(roster.keys())
+            opp_names = set()
+            for col in ['Opponent1', 'Opponent2', 'Singles Opponent']:
+                if col in event.columns:
+                    opp_names |= {v for v in event[col].dropna() if isinstance(v, str)}
+            for name in sorted(opp_names - participants):
+                issues.append(f"{label}: opponent name '{name}' never appears as a player this event "
+                              f"— possible misspelling")
 
-    # 7. FTAS rows: every player on a side should carry the same Points earned (0.5 for
+    # 8. FTAS rows: every player on a side should carry the same Points earned (0.5 for
     # the winning team, 0 for the losers). Team totals use the group mean, so a stray
     # 0 among 0.5s would silently shave the team score.
-    ftas = work[work['Singles/Doubles'] == 'FTAS']
-    for (fbc, mid, team), grp in ftas.groupby(['FBC', 'UniqueMatchID', 'Team']):
-        if grp['Points earned'].nunique(dropna=False) > 1:
-            vals = sorted(float(v) for v in grp['Points earned'].fillna(-1).unique())
-            issues.append(f"FBC {int(fbc)}: FTAS rows for team {team} ({mid}) have mixed "
-                          f"Points earned {vals} — every player on a side should show the same value")
+    with _health_check(issues, 'FTAS consistency'):
+        ftas = work[work['Singles/Doubles'] == 'FTAS']
+        for (fbc, mid, team), grp in ftas.groupby(['FBC', 'UniqueMatchID', 'Team']):
+            if grp['Points earned'].nunique(dropna=False) > 1:
+                vals = sorted(float(v) for v in grp['Points earned'].fillna(-1).unique())
+                issues.append(f"FBC {int(fbc)}: FTAS rows for team {team} ({mid}) have mixed "
+                              f"Points earned {vals} — every player on a side should show the same value")
 
-    # 8. Cups sheet names must match the Archives spelling exactly, and every Archives
-    # player needs a Cups row — otherwise cup stats and the Ask Claude context refer to
-    # one person by two names, or leave them out.
+    # 9. Cups sheet names must match the Archives spelling exactly, every Archives
+    # player needs a Cups row, and every Archives event needs a Cups column — otherwise
+    # cup stats and the Ask Claude context refer to one person by two names, leave
+    # them out, or never count the newest cup at all.
     if cups_df is not None and 'Player' in cups_df.columns:
-        archive_players = {p for p in pd.concat([work['Player 1'], work['Player 2']]).dropna()
-                           if isinstance(p, str)}
-        cups_players = {p.strip() for p in cups_df['Player'].dropna() if isinstance(p, str)}
-        unknown = sorted(cups_players - archive_players)
-        if unknown:
-            issues.append("Cups sheet: names not found in Archives: " + ", ".join(unknown) +
-                          " — rename to the Archives spelling")
-        missing = sorted(archive_players - cups_players)
-        if missing:
-            issues.append("Cups sheet: Archives players with no Cups row: " + ", ".join(missing))
+        with _health_check(issues, 'Cups sheet'):
+            archive_players = {p for p in pd.concat([work['Player 1'], work['Player 2']]).dropna()
+                               if isinstance(p, str)}
+            cups_players = {p.strip() for p in cups_df['Player'].dropna() if isinstance(p, str)}
+            unknown = sorted(cups_players - archive_players)
+            if unknown:
+                issues.append("Cups sheet: names not found in Archives: " + ", ".join(unknown) +
+                              " — rename to the Archives spelling")
+            missing = sorted(archive_players - cups_players)
+            if missing:
+                issues.append("Cups sheet: Archives players with no Cups row: " + ", ".join(missing))
+            cup_events = {num for num, _ in _fbc_columns(cups_df)}
+            for num in sorted({int(x) for x in work['FBC'].unique()} - cup_events):
+                issues.append(f"Cups sheet: no 'FBC {num}' column — the header must read exactly "
+                              f"'FBC {num}' (with the space); that cup is not being counted")
 
     return issues
-
 
 def prepare_data_context(df, question, cups_df=None):
     """Prepare relevant FBC data context based on the question."""
@@ -2904,7 +2985,9 @@ def main():
                     st.warning(issue)
         else:
             st.caption("🩺 Data health: all integrity checks pass "
-                       "(two-sided matches, valid W/L/T, two teams per event, no name mismatches).")
+                       "(required columns filled, two-sided matches, valid W/L/T, exact "
+                       "Singles/Doubles values, two teams per event, no name mismatches, "
+                       "a Cups column for every event).")
     except Exception as e:
         st.caption(f"🩺 Data health check could not run: {e}")
 
