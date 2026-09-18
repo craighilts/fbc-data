@@ -141,9 +141,9 @@ def _data_file_mtime():
 
 
 @st.cache_data
-def _load_cups_data_cached(file_mtime):
+def _load_cups_data_cached(file_mtime, path='FBC_Data.xlsx'):
     """Load and process the Cups data showing which players won each cup."""
-    cups_raw = pd.read_excel('FBC_Data.xlsx', sheet_name='Cups', header=None)
+    cups_raw = pd.read_excel(path, sheet_name='Cups', header=None)
 
     # Find the header row by locating the cell whose value is 'Player'.
     header_row_idx = None
@@ -256,9 +256,9 @@ def get_cups_summary(cups_df):
     return sorted(summary, key=lambda x: x['Cups Won'], reverse=True)
 
 @st.cache_data
-def _load_data_cached(file_mtime):
+def _load_data_cached(file_mtime, path='FBC_Data.xlsx'):
     """Load and process the FBC data."""
-    df = pd.read_excel('FBC_Data.xlsx', sheet_name='Archives')
+    df = pd.read_excel(path, sheet_name='Archives')
 
     # Clean up the data
     df = df.dropna(subset=['Player 1'])
