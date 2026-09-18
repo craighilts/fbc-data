@@ -54,12 +54,16 @@ This is the main data sheet. Each row is one match (from one team's perspective)
 
 | Column | What to enter | Notes |
 |---|---|---|
+| `Match #` | Match number within the event (1, 2, 3 …) | Orders matches within an event for streak calculations |
 | `FBC` | FBC event number (e.g. 13) | Integer |
-| `Date` | Match date | Format: YYYY-MM-DD or MM/DD/YYYY |
-| `Geographic Location` | City / region (e.g. "Scottsdale") | Used for event labels |
+| `UniqueMatchID` | `FBC13-D1`, `FBC13-D2` … for doubles; `FBC13-S-Cole-Shively` (both surnames, alphabetical) for singles; `FBC13-FT` for every FTAS row | **Required.** Pairs the two sides of a match and lets the app score the FTAS once per team instead of once per player |
+| `Date` | Match date | Must be a real Excel date cell, not text |
+| `Geographic Location` | City / region (e.g. "Scottsdale, AZ") | Used for event labels |
 | `Course` | Full course name | Spell consistently — used for course stats |
-| `Singles/Doubles` | `Singles`, `Doubles`, or `FTAS` | Case-sensitive |
+| `Singles/Doubles` | `Singles`, `Doubles`, or `FTAS` | **Exactly** these spellings — `ftas` or `singles` is scored as an ordinary match |
 | `Format` | Match format (e.g. `Match Play`, `Best Ball`) | |
+| `Team` | The captain's surname (e.g. `Lynch`) | **Required.** Team totals and the cup winner are computed from it |
+| `Captain Size` | `Over 6'`, `Under 6'` or `Mix` | Optional; shown on the Cups tab |
 | `Player 1` | First player on the team | |
 | `Player 2` | Second player (Doubles/FTAS only) | Leave blank for Singles |
 | `Singles Opponent` | Opponent name (Singles only) | Leave blank for Doubles/FTAS |
@@ -69,6 +73,11 @@ This is the main data sheet. Each row is one match (from one team's perspective)
 | `L` | `1` if this team lost, `0` otherwise | |
 | `T` | `1` if this match tied, `0` otherwise | Exactly one of W/L/T must be 1 per row |
 | `Points earned` | Points awarded: `1.0` win, `0.5` tie, `0.0` loss | Some formats award `2.0` for bonus wins |
+
+The numeric `W`, `L`, `T` columns are what the app counts records from (the letter `W/L/T`
+column is for reading). `SingleEntity` is the only unused column. Do not type notes into the
+`Player 1` column of a spare row — a row with a name but no `FBC` number becomes a phantom
+player in every dropdown.
 
 **How doubles matches are entered:**
 
@@ -92,9 +101,13 @@ Row 2: Player1=Grise, Singles Opponent=Hilts, W=0, L=1, T=0, Points=0.0
 
 This sheet tracks which team won each FBC event. Update after each FBC:
 
+- Add a column headed **exactly** `FBC 13` (with the space). The app finds cup columns by that
+  label and silently ignores anything else, and Data Health will flag an event with no column.
 - `1` = player was on the winning team
 - `0` = player was on the losing team
 - `X` = player did not participate
+- A first-time player gets a row **inside** the existing list, above the `Total` row. Rows below
+  `Total` are not read.
 
 ### Player name rules
 
@@ -109,8 +122,10 @@ If a new player joins, just use their name consistently and it will appear autom
 
 The FTAS tiebreaker is entered as **one row per player** (so each player's individual record
 reflects it): every player on the winning team gets `Points earned = 0.5`, losers get `0`.
+Every FTAS row carries `Singles/Doubles = FTAS` and `UniqueMatchID = FBC13-FT` (for FBC 13).
 The app knows to count the FTAS only **once** (0.5 to the winning team) when computing team
-totals and margins — do not worry that the per-player rows appear to "overcount".
+totals and margins — do not worry that the per-player rows appear to "overcount". Not every
+event has one (FBC 12 did not); just leave it out when it wasn't played.
 
 ---
 
@@ -154,6 +169,10 @@ update instructions. Its admin CSV export matches the Archives format below.
 | Match Predictor | Win probability based on historical stats |
 | Ask Claude | Conversational Q&A powered by Claude AI — follow-up questions supported |
 
-A **Data Health** check runs at the bottom of every page — it verifies match structure
-(two sides per match, valid W/L/T flags, two teams per event, no opponent-name typos)
-and surfaces any entry errors after new FBC data is added.
+A **Data Health** check runs at the bottom of every page and surfaces entry errors after new
+FBC data is added. It checks for: stray rows with a name but no FBC number; blank
+`UniqueMatchID`, `Team`, `Date`, `Geographic Location` or `Course`; `Singles/Doubles` values
+other than the three exact spellings; two sides per match; valid W/L/T flags and Points
+earned; two teams per event; date typos; opponent-name typos; consistent FTAS rows; Cups-sheet
+names that match the Archives spelling; and a Cups column for every event in Archives. Each
+check runs independently, so one bad column cannot hide the other results.
