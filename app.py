@@ -1809,13 +1809,20 @@ Question: {question}
 Please answer based on the data provided above. Cite specific statistics."""
     })
 
-    message = client.messages.create(
-        model="claude-sonnet-5",
+    message = client.beta.messages.create(
+        model="claude-sonnet-5-5",
         max_tokens=8000,
         # Cache the static system prompt so repeat questions in a session are cheaper/faster
         system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
-        messages=messages
+        messages=messages,
+        # If a safety classifier declines the question, the API retries it on a
+        # fallback model within the same call instead of returning nothing.
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
     )
+
+    if message.stop_reason == "refusal":
+        return "Claude declined to answer that question. Please try rephrasing it."
 
     # The response is a list of content blocks; current models can return a
     # thinking block ahead of the text, so pick the text block explicitly
