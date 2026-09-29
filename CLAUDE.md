@@ -1,8 +1,9 @@
 # FBC Data — notes for Claude sessions
 
 Streamlit app (`app.py`) over `FBC_Data.xlsx`, deployed from `main` at
-freddiebcup.streamlit.app. The app reads only the **Archives** and **Cups** sheets;
-the other 26 tabs are Excel formulas the owner maintains by hand.
+freddiebcup.streamlit.app. The app reads the **Archives** and **Cups** sheets, plus **Cup Info** (one manual row
+per cup: Rain Yes/No and Notes, shown on the Cups tab and in Ask Claude). The other
+tabs are Excel formulas the owner maintains by hand.
 
 ## Adding a cup's results
 

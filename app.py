@@ -225,6 +225,56 @@ def load_cups_data():
     return _load_cups_data_cached(_data_file_mtime())
 
 
+@st.cache_data
+def _load_cup_info_cached(file_mtime, path='FBC_Data.xlsx'):
+    """Load the Cup Info sheet: one manually entered row per cup.
+
+    Returns {fbc_number: {'rain': True/False/None, 'notes': str}}. Columns are found
+    by header text ('FBC', 'Rain', 'Notes'), not position. Rain is 'Yes'/'No'; anything
+    else (including blank) is treated as unknown. A missing sheet returns {} so the
+    rest of the app keeps working.
+    """
+    try:
+        raw = pd.read_excel(path, sheet_name='Cup Info', header=None)
+    except ValueError:  # sheet not present
+        return {}
+
+    header_row = fbc_col = rain_col = notes_col = None
+    for r in range(raw.shape[0]):
+        labels = {str(raw.iat[r, c]).strip(): c for c in range(raw.shape[1])
+                  if isinstance(raw.iat[r, c], str)}
+        if 'FBC' in labels and 'Rain' in labels:
+            header_row, fbc_col = r, labels['FBC']
+            rain_col, notes_col = labels['Rain'], labels.get('Notes')
+            break
+    if header_row is None:
+        return {}
+
+    info = {}
+    for r in range(header_row + 1, raw.shape[0]):
+        fbc = pd.to_numeric(raw.iat[r, fbc_col], errors='coerce')
+        if pd.isna(fbc):
+            continue
+        rain_val = raw.iat[r, rain_col]
+        rain_txt = rain_val.strip().lower() if isinstance(rain_val, str) else ''
+        rain = True if rain_txt == 'yes' else (False if rain_txt == 'no' else None)
+        note = raw.iat[r, notes_col] if notes_col is not None else None
+        info[int(fbc)] = {'rain': rain,
+                          'notes': note.strip() if isinstance(note, str) else ''}
+    return info
+
+
+def load_cup_info():
+    try:
+        return _load_cup_info_cached(_data_file_mtime())
+    except Exception:
+        return {}
+
+
+def _rain_label(rain):
+    return 'Yes' if rain is True else ('No' if rain is False else '')
+
+
 def get_cups_summary(cups_df):
     """Get summary statistics about cup wins."""
     fbc_cols = _fbc_columns(cups_df)
@@ -969,9 +1019,11 @@ def get_cup_results_table(df):
     includes their 0.5 FTAS share).
     """
     results = get_fbc_team_results(df)
+    cup_info = load_cup_info()
     rows = []
     for r in results:
         event = df[df['FBC'] == r['fbc']]
+        info = cup_info.get(r['fbc'], {})
         stats = calculate_player_stats_for_subset(event)  # sorted by Points desc
         if stats:
             top_pts = max(s['Points'] for s in stats)
@@ -989,6 +1041,8 @@ def get_cup_results_table(df):
             'Loser Total': round(loser_pts, 1) if loser_pts is not None else None,
             'Margin': round(r['margin'], 1),
             'Highest Individual': top_label,
+            'Rain': _rain_label(info.get('rain')),
+            'Notes': info.get('notes', ''),
         })
     return pd.DataFrame(rows)
 
@@ -1615,15 +1669,26 @@ def prepare_data_context(df, question, cups_df=None):
         context_parts.append("  (Each FBC is a team event. The 'Team' is named after its CAPTAIN.")
         context_parts.append("   A team's score = total Points earned by its players. The winning captain's")
         context_parts.append("   team has the most points; margin of victory = winner's points minus runner-up's.)")
+        cup_info = load_cup_info()
         # Sort the summary by margin so 'biggest/closest margin' questions are easy to read
         for r in sorted(team_results, key=lambda x: x['margin'], reverse=True):
+            info = cup_info.get(r['fbc'], {})
+            weather = {True: " | rain: yes", False: " | rain: no"}.get(info.get('rain'), "")
+            note = f" | note: {info['notes']}" if info.get('notes') else ""
             scores = ', '.join(f"{cap} {pts:.1f}" for cap, pts in r['teams'])
             if r['tie']:
                 outcome = f"TIED at {r['teams'][0][1]:.1f} (no margin)"
             else:
                 outcome = f"won by {r['winner']} over {r['loser']} by {r['margin']:.1f} pts"
             multi = f" [{r['num_teams']} teams]" if r['num_teams'] > 2 else ""
-            context_parts.append(f"    FBC {r['fbc']} ({r['location']}): {outcome}{multi} | team scores: {scores}")
+            context_parts.append(f"    FBC {r['fbc']} ({r['location']}): {outcome}{multi} | team scores: {scores}{weather}{note}")
+        rained = sorted(f for f, v in cup_info.items() if v.get('rain') is True)
+        dry = sorted(f for f, v in cup_info.items() if v.get('rain') is False)
+        if rained or dry:
+            context_parts.append(
+                "  WEATHER (per cup, from the Cup Info tab; not recorded per round): "
+                f"rained at FBC {', '.join(map(str, rained)) or 'none'}; "
+                f"no rain at FBC {', '.join(map(str, dry)) or 'none'}.")
 
         # Detailed roster for a specifically mentioned event or team/margin questions
         detail_fbc = fbc_num if fbc_num is not None else None
@@ -2398,13 +2463,15 @@ def main():
             st.markdown(
                 "Final team result for every FBC. **Winner/Loser Total** are the team point totals "
                 "(the FTAS tiebreaker counts once, as 0.5 to the winning team), **Margin** is the gap "
-                "between them, and **Highest Individual** is the event's top individual point scorer."
+                "between them, and **Highest Individual** is the event's top individual point scorer. "
+                "**Rain** and **Notes** come from the Cup Info tab."
             )
             try:
                 cup_results = get_cup_results_table(df)
                 st.dataframe(
-                    cup_results[['FBC', 'Location', 'Winning Captain', 'Losing Captain',
-                                 'Winner Total', 'Loser Total', 'Margin', 'Highest Individual']],
+                    cup_results[['FBC', 'Location', 'Rain', 'Winning Captain', 'Losing Captain',
+                                 'Winner Total', 'Loser Total', 'Margin', 'Highest Individual',
+                                 'Notes']],
                     hide_index=True,
                     width='stretch',
                 )

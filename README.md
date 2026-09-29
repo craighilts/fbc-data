@@ -135,6 +135,14 @@ This sheet tracks which team won each FBC event. Update after each FBC:
 - A first-time player gets a row **inside** the existing list, above the `Total` row. Rows below
   `Total` are not read.
 
+### Cup Info sheet — per-cup facts
+
+One row per cup, added by hand after each FBC: FBC, Year, Start, End, Location, Region,
+**Rain** (`Yes` / `No`, per cup, not per round) and **Notes**. The app finds the columns by
+their header text and shows Rain and Notes in the Cups tab's "Cup Results by Event" table
+and in the Ask Claude context. A missing row or a blank Rain just shows as blank; it is not
+a Data Health issue, so `import_cup.py` does not need it.
+
 ### Player name rules
 
 Player names must be spelled **exactly the same** every time (canonical spellings: `DeOteris`,
