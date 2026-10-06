@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import html
 import os
 import re
 import contextlib
@@ -14,113 +15,179 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Golf-themed color scheme
+# Palette — matches .streamlit/config.toml. Player 1 / Team 1 is green, the other side
+# is a warm clay so comparisons never read as "good vs bad" red.
 COLORS = {
-    'primary': '#1B4D3E',      # Dark green (masters green)
-    'secondary': '#2E8B57',    # Sea green
-    'accent': '#FFD700',       # Gold
-    'light': '#90EE90',        # Light green
-    'bg': '#F7F9F7',           # Clean light background
-    'text': '#1B4D3E',
-    'win': '#16A34A',
-    'loss': '#DC2626',
-    'tie': '#D97706'
+    'primary': '#1E5B43',      # Augusta-ish green
+    'primary_soft': '#E6EFE9',
+    'accent': '#B8913A',       # muted brass (trophy) gold
+    'rival': '#A4552F',        # clay — the "other side" in comparisons
+    'rival_soft': '#F5E9E2',
+    'bg': '#FAFAF7',
+    'surface': '#FFFFFF',
+    'border': '#E2E5DE',
+    'text': '#18221D',
+    'muted': '#5F6B64',
+    'win': '#1E7A4C',
+    'loss': '#B42318',
+    'tie': '#9A6B12',
 }
 
-# Custom CSS
 st.markdown(f"""
 <style>
-    .stApp {{
-        background-color: {COLORS['bg']};
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    /* ---------- layout ---------- */
+    .block-container {{ padding-top: 2rem; max-width: 1180px; }}
+    header[data-testid="stHeader"] {{ background: transparent; }}
+
+    /* ---------- masthead ---------- */
+    .fbc-masthead {{
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 1rem; flex-wrap: wrap;
+        padding: 0 0 1.1rem; margin-bottom: 0.25rem;
+        border-bottom: 1px solid {COLORS['border']};
     }}
-    .main-header {{
-        background: {COLORS['primary']};
-        color: white;
-        padding: 2rem 1.5rem;
-        border-radius: 12px;
-        text-align: center;
-        margin-bottom: 2rem;
+    .fbc-brand {{ display: flex; align-items: center; gap: 0.85rem; }}
+    .fbc-crest {{
+        width: 46px; height: 46px; border-radius: 50%;
+        background: {COLORS['primary']}; color: #fff;
+        display: grid; place-items: center; flex-shrink: 0;
+        font: 700 0.85rem/1 'Source Serif 4', serif; letter-spacing: 0.5px;
+        box-shadow: inset 0 0 0 2px {COLORS['primary']}, inset 0 0 0 3.5px {COLORS['accent']};
     }}
-    .main-header h1 {{
-        margin: 0;
-        font-size: 2rem;
-        font-weight: 700;
-        letter-spacing: -0.5px;
+    .fbc-title {{
+        font: 700 1.55rem/1.15 'Source Serif 4', serif; color: {COLORS['text']};
+        margin: 0; letter-spacing: -0.2px;
     }}
-    .main-header p {{
-        margin: 0.4rem 0 0;
-        opacity: 0.7;
-        font-size: 0.85rem;
-        letter-spacing: 1.5px;
-        text-transform: uppercase;
+    .fbc-sub {{ color: {COLORS['muted']}; font-size: 0.85rem; margin-top: 2px; }}
+    .fbc-latest {{
+        background: {COLORS['surface']}; border: 1px solid {COLORS['border']};
+        border-radius: 999px; padding: 0.4rem 0.9rem; font-size: 0.82rem; color: {COLORS['muted']};
     }}
-    .stat-card {{
-        background: white;
-        padding: 1.25rem 1rem;
-        border-radius: 12px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(27,77,62,0.06);
-        text-align: center;
-        border-top: 3px solid {COLORS['primary']};
+    .fbc-latest b {{ color: {COLORS['text']}; font-weight: 600; }}
+    .fbc-latest .dot {{
+        display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+        background: {COLORS['accent']}; margin-right: 6px; vertical-align: 1px;
     }}
-    .stat-value {{
-        font-size: 1.75rem;
-        font-weight: 700;
-        color: {COLORS['primary']};
-        letter-spacing: -0.5px;
-    }}
-    .stat-label {{
-        font-size: 0.72rem;
-        color: #6B7280;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
-        margin-top: 0.2rem;
-    }}
-    .section-header {{
-        color: {COLORS['primary']};
-        font-weight: 700;
-        border-bottom: 2px solid {COLORS['accent']};
-        padding-bottom: 0.4rem;
-        margin: 1.5rem 0 1rem 0;
-        text-transform: uppercase;
-        letter-spacing: 0.4px;
-        font-size: 1rem;
-    }}
-    .win {{ color: {COLORS['win']}; font-weight: 600; }}
-    .loss {{ color: {COLORS['loss']}; font-weight: 600; }}
-    .tie {{ color: {COLORS['tie']}; font-weight: 600; }}
-    .dataframe {{
-        font-size: 0.9rem !important;
-    }}
-    @media (max-width: 768px) {{
-        .stat-value {{ font-size: 1.4rem; }}
-        .stat-label {{ font-size: 0.68rem; }}
-        .main-header h1 {{ font-size: 1.5rem; }}
-    }}
-    div[data-testid="stMetricValue"] {{
-        font-size: 1.5rem;
-    }}
-    .stTabs [data-baseweb="tab-list"] {{
-        gap: 4px;
-        background-color: #E8F0E8;
-        padding: 4px;
-        border-radius: 10px;
-    }}
+
+    /* ---------- tabs ---------- */
+    .stTabs [data-baseweb="tab-list"] {{ gap: 1.4rem; border-bottom: 1px solid {COLORS['border']}; }}
     .stTabs [data-baseweb="tab"] {{
-        background-color: transparent;
-        border-radius: 7px;
-        padding: 8px 16px;
-        font-weight: 500;
-        color: #4B6B5A;
+        padding: 0.7rem 0 0.6rem; font-weight: 500; color: {COLORS['muted']};
+        background: transparent;
     }}
-    .stTabs [aria-selected="true"] {{
-        background-color: white;
-        color: {COLORS['primary']};
-        font-weight: 600;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    .stTabs [data-baseweb="tab"] p {{ font-size: 0.95rem; }}
+    .stTabs [aria-selected="true"] {{ color: {COLORS['text']}; }}
+    .stTabs [data-baseweb="tab-highlight"] {{ background-color: {COLORS['primary']}; height: 2px; }}
+    .stTabs [data-baseweb="tab-border"] {{ display: none; }}
+
+    /* ---------- section headings ---------- */
+    .section-header {{
+        font: 600 1.2rem/1.3 'Source Serif 4', serif; color: {COLORS['text']};
+        margin: 1.9rem 0 0.15rem; padding: 0; letter-spacing: -0.1px;
+    }}
+    .section-header.h4 {{ font-size: 1.05rem; margin-top: 1.5rem; margin-bottom: 0.5rem; }}
+    .section-note {{ color: {COLORS['muted']}; font-size: 0.85rem; margin: 0 0 0.7rem; }}
+
+    /* ---------- KPI tiles ---------- */
+    .kpi-grid {{
+        display: grid; gap: 0.75rem; margin: 0.75rem 0 0.5rem;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    }}
+    .kpi {{
+        background: {COLORS['surface']}; border: 1px solid {COLORS['border']};
+        border-radius: 12px; padding: 0.85rem 1rem 0.9rem;
+    }}
+    .kpi-label {{
+        font-size: 0.72rem; font-weight: 600; color: {COLORS['muted']};
+        text-transform: uppercase; letter-spacing: 0.6px;
+    }}
+    .kpi-value {{
+        font-size: 1.6rem; font-weight: 700; color: {COLORS['text']};
+        line-height: 1.2; margin-top: 0.3rem; font-variant-numeric: tabular-nums;
+        letter-spacing: -0.4px; overflow-wrap: anywhere;
+    }}
+    .kpi-note {{ font-size: 0.8rem; color: {COLORS['muted']}; margin-top: 0.15rem; }}
+    .kpi.p1 {{ border-top: 3px solid {COLORS['primary']}; }}
+    .kpi.p2 {{ border-top: 3px solid {COLORS['rival']}; }}
+
+    /* ---------- versus / prediction ---------- */
+    .vs-bar {{ display: flex; height: 12px; border-radius: 999px; overflow: hidden; margin: 0.4rem 0 0.3rem; }}
+    .vs-bar span:first-child {{ background: {COLORS['primary']}; }}
+    .vs-bar span:last-child {{ background: {COLORS['rival']}; }}
+    .vs-legend {{ display: flex; justify-content: space-between; font-size: 0.85rem; color: {COLORS['muted']}; }}
+    .vs-legend b {{ color: {COLORS['text']}; font-variant-numeric: tabular-nums; }}
+    .side-label {{ font-size: 0.72rem; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; margin-bottom: -0.4rem; }}
+    .side-label.p1 {{ color: {COLORS['primary']}; }}
+    .side-label.p2 {{ color: {COLORS['rival']}; }}
+
+    .legend-chips {{ display: flex; gap: 0.5rem; flex-wrap: wrap; font-size: 0.8rem; color: {COLORS['muted']}; margin: 0 0 0.6rem; }}
+    .legend-chips span {{ display: inline-flex; align-items: center; gap: 0.35rem; }}
+    .legend-chips i {{ display: inline-block; width: 18px; height: 18px; border-radius: 4px; font-style: normal;
+        font-size: 0.7rem; font-weight: 700; text-align: center; line-height: 18px; }}
+
+    @media (max-width: 640px) {{
+        .block-container {{ padding-top: 1rem; }}
+        .kpi-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }}
+        .kpi {{ padding: 0.7rem 0.8rem; }}
+        .kpi-value {{ font-size: 1.25rem; }}
+        .fbc-title {{ font-size: 1.25rem; }}
+        .fbc-latest {{ border-radius: 10px; }}
+        .stTabs [data-baseweb="tab-list"] {{ gap: 1rem; }}
     }}
 </style>
 """, unsafe_allow_html=True)
+
+
+def kpi_tiles(items, variant=None):
+    """Render a responsive row of stat tiles. items: (label, value[, note]) tuples."""
+    cls = f"kpi {variant}" if variant else "kpi"
+    tiles = []
+    for item in items:
+        label, value = item[0], item[1]
+        note = item[2] if len(item) > 2 and item[2] else ''
+        note_html = f"<div class='kpi-note'>{html.escape(str(note))}</div>" if note else ''
+        tiles.append(f"<div class='{cls}'><div class='kpi-label'>{html.escape(str(label))}</div>"
+                     f"<div class='kpi-value'>{html.escape(str(value))}</div>{note_html}</div>")
+    st.markdown(f"<div class='kpi-grid'>{''.join(tiles)}</div>", unsafe_allow_html=True)
+
+
+def section(title, note=None, level=3):
+    # A div (not <h3>) so Streamlit doesn't attach hover anchor-link icons
+    st.markdown(f"<div class='section-header h{level}' role='heading' aria-level='{level}'>"
+                f"{html.escape(title)}</div>", unsafe_allow_html=True)
+    if note:
+        st.markdown(f"<p class='section-note'>{note}</p>", unsafe_allow_html=True)
+
+
+def vs_bar(left_label, left_pct, right_label, right_pct):
+    """Two-sided probability bar (left = green side, right = clay side)."""
+    st.markdown(f"""
+    <div class="vs-bar"><span style="width:{left_pct:.1f}%"></span><span style="width:{right_pct:.1f}%"></span></div>
+    <div class="vs-legend"><span>{html.escape(left_label)} <b>{left_pct:.0f}%</b></span>
+    <span><b>{right_pct:.0f}%</b> {html.escape(right_label)}</span></div>
+    """, unsafe_allow_html=True)
+
+
+# Column helpers: keep numbers numeric so grid header-click sorting works
+# (pre-formatted "%"-strings sort alphabetically: "9.1%" ranked above "50.0%").
+def pct_column(label='Win %', bar=False):
+    if bar:
+        return st.column_config.ProgressColumn(label, format="%.1f%%", min_value=0, max_value=100)
+    return st.column_config.NumberColumn(label, format="%.1f%%")
+
+
+def to_pct(series):
+    return (series.astype(float) * 100).round(1)
+
+
+def show_table(data, column_config=None, fit=False, **kwargs):
+    """st.dataframe with house defaults. fit=True sizes the grid to show every row
+    without an inner scrollbar (rows are 33px at the theme's 15px base font, plus the
+    header and border)."""
+    if fit:
+        n = len(data.data) if hasattr(data, 'data') else len(data)
+        kwargs['height'] = 33 * (n + 1) + 3
+    st.dataframe(data, hide_index=True, width='stretch', column_config=column_config, **kwargs)
 
 _FBC_COL_PATTERN = re.compile(r'^FBC\s+(\d+)$')
 
@@ -390,6 +457,22 @@ def get_player_by_event(df, player):
     })
 
     return event_stats[['Event', 'Location', 'Record', 'Win%', 'Points', 'Matches']].sort_values('Event')
+
+
+# Display-only spellings for the Archives 'Team' (captain) column. FBC 7 had co-captains
+# entered as "Ferrin/Jax"; everywhere else Jackson is "Jackson".
+TEAM_DISPLAY_ALIASES = {'Jax': 'Jackson'}
+
+
+def team_label(team):
+    if not isinstance(team, str):
+        return team
+    return '/'.join(TEAM_DISPLAY_ALIASES.get(t.strip(), t.strip()) for t in team.split('/'))
+
+
+def fmt_pts(x):
+    """24.0 -> '24', 24.5 -> '24.5'."""
+    return f"{x:g}" if x is not None and pd.notna(x) else ''
 
 def get_partner_performance(df, player):
     """Get player's record with each doubles partner."""
@@ -732,7 +815,9 @@ def get_course_performance(df, player):
 
     course_stats = course_stats.rename(columns={'Points earned': 'Points'})
 
-    return course_stats[['Course', 'Record', 'Win%', 'Points', 'Matches']].sort_values('Win%', ascending=False)
+    # Most-played courses first: sorting by Win% put one-off 1-0-0 rounds at the top
+    return course_stats[['Course', 'Record', 'Win%', 'Points', 'Matches']].sort_values(
+        ['Matches', 'Win%'], ascending=[False, False])
 
 @st.cache_data
 def get_leaderboard(df):
@@ -1134,7 +1219,7 @@ def get_biggest_match_wins(df):
             losers = f"{r['Opponent1']}/{r['Opponent2']}" if pd.notna(r.get('Opponent2')) else str(r['Opponent1'])
         else:
             losers = str(r.get('Singles Opponent', ''))
-        rows.append({'Margin': res.strip(), 'Winner': winners, 'Loser': losers,
+        rows.append({'Margin': f"{up}&{togo}", 'Winner': winners, 'Loser': losers,
                      'FBC': int(r['FBC']), 'Format': r.get('Format', ''),
                      '_sort': (up, togo)})
     rows.sort(key=lambda x: x['_sort'], reverse=True)
@@ -2182,15 +2267,50 @@ def format_pct(val):
     """Format percentage for display."""
     return f"{val:.1%}"
 
-def main():
-    # Header
-    st.markdown("""
-    <div class="main-header">
-        <h1>⛳ FBC Statistics Dashboard</h1>
-        <p style="margin:0;opacity:0.9;">Freddie B Cup</p>
+def _record_rows(items, name_key, name_label):
+    """Turn best/worst course or partner dicts into a small display table."""
+    return pd.DataFrame([{
+        name_label: it[name_key],
+        'Record': f"{it['wins']}-{it['losses']}-{it['ties']}",
+        'Win%': round(it['win_pct'] * 100, 1),
+    } for it in items])
+
+
+CUP_CELL = {'1': 'W', '0': 'L', 'X': '·'}
+
+
+def _cup_cell_style(v):
+    if v == 'W':
+        return f"background-color: {COLORS['primary_soft']}; color: {COLORS['win']}; font-weight: 600; text-align: center;"
+    if v == 'L':
+        return f"color: {COLORS['loss']}; text-align: center;"
+    return "color: #B7BDB6; text-align: center;"
+
+
+def render_masthead(df):
+    results = get_fbc_team_results(df)
+    n_players = len(set(df['Player 1'].dropna()) | set(df['Player 2'].dropna()))
+    sub = f"{len(results)} cups · {df['UniqueMatchID'].nunique():,} matches · {n_players} players"
+    latest = ''
+    if results:
+        r = results[-1]
+        w, l = r['teams'][0][1], (r['teams'][1][1] if len(r['teams']) > 1 else None)
+        verb = 'halved with' if r['tie'] else 'def.'
+        latest = (f"<div class='fbc-latest'><span class='dot'></span>Latest · <b>FBC {r['fbc']}</b>, "
+                  f"{html.escape(str(r['location']))} — Team {html.escape(team_label(r['winner']))} {verb} "
+                  f"Team {html.escape(team_label(r['loser'] or ''))}, <b>{fmt_pts(w)}–{fmt_pts(l)}</b></div>")
+    st.markdown(f"""
+    <div class="fbc-masthead">
+        <div class="fbc-brand">
+            <div class="fbc-crest">FBC</div>
+            <div><div class="fbc-title">The Freddie B Cup</div><div class="fbc-sub">{sub}</div></div>
+        </div>
+        {latest}
     </div>
     """, unsafe_allow_html=True)
 
+
+def main():
     # Load data
     try:
         df = load_data()
@@ -2198,10 +2318,19 @@ def main():
         st.error(f"Error loading data: {e}")
         return
 
+    render_masthead(df)
+
     # Get list of all players
     all_players = sorted(set(df['Player 1'].dropna().unique()) |
                         set(df[df['Player 2'].notna()]['Player 2'].unique()))
     all_players = [p for p in all_players if isinstance(p, str)]
+
+    # Default comparison picks: the career points leaders (instead of alphabetical,
+    # which opened every comparison on long-retired players)
+    leaderboard_base = get_leaderboard(df)
+    leaders = [p for p in leaderboard_base['Player'] if p in all_players]
+    def _default_idx(rank):
+        return all_players.index(leaders[rank]) if len(leaders) > rank else 0
 
     # Load cups data
     try:
@@ -2212,312 +2341,192 @@ def main():
 
     # Create tabs
     tab1, tab2, tab3, tab_records, tab4, tab5, tab6 = st.tabs([
-        "📊 Player Stats", "🏆 Leaderboard", "🏅 Cups", "📜 Records",
-        "⚔️ Tale of the Tape", "🎯 Match Predictor", "🤖 Ask Claude"
+        "Players", "Leaderboard", "Cups", "Records",
+        "Tale of the Tape", "Match Predictor", "Ask Claude"
     ])
 
     with tab1:
-        # Player selection
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            # Default to Connolly if available
-            default_idx = all_players.index("Connolly") if "Connolly" in all_players else 0
-            selected_player = st.selectbox(
-                "Select a Player",
-                options=all_players,
-                index=default_idx
-            )
+        default_idx = all_players.index("Connolly") if "Connolly" in all_players else 0
+        selected_player = st.selectbox("Player", options=all_players, index=default_idx, width=320)
 
         if selected_player:
             stats = get_player_stats(df, selected_player)
 
             if stats:
-                # Career stats cards
-                st.markdown(f"<h3 class='section-header'>{selected_player}'s Career Stats</h3>", unsafe_allow_html=True)
+                section(f"{selected_player} — career")
+                kpi_tiles([
+                    ('Record', stats['record'], 'W-L-T'),
+                    ('Win %', f"{stats['win_pct']:.1%}"),
+                    ('Points', f"{stats['points']:.1f}"),
+                    ('Matches', stats['matches']),
+                    ('Events', stats['events']),
+                ])
 
-                col1, col2, col3, col4, col5 = st.columns(5)
-
-                with col1:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value">{stats['record']}</div>
-                        <div class="stat-label">Record</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                with col2:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value">{stats['win_pct']:.1%}</div>
-                        <div class="stat-label">Win %</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                with col3:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value">{stats['points']:.1f}</div>
-                        <div class="stat-label">Points</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                with col4:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value">{stats['matches']}</div>
-                        <div class="stat-label">Matches</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                with col5:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value">{stats['events']}</div>
-                        <div class="stat-label">Events</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                # Sub-tabs for detailed stats
                 subtab1, subtab2, subtab3, subtab4 = st.tabs([
-                    "📅 By Event", "👥 Partners", "🎯 Head-to-Head", "🏌️ By Course"
+                    "By event", "Partners", "Head-to-head", "By course"
                 ])
 
                 with subtab1:
-                    st.markdown("<h4 class='section-header'>Record by FBC Event</h4>", unsafe_allow_html=True)
                     event_df = get_player_by_event(df, selected_player)
                     if not event_df.empty:
-                        event_df['Win%'] = event_df['Win%'].apply(format_pct)
-                        st.dataframe(
-                            event_df,
-                            hide_index=True,
-                            width='stretch'
-                        )
+                        event_df = event_df.rename(columns={'Event': 'FBC'})
+                        event_df['Win%'] = to_pct(event_df['Win%'])
+                        show_table(event_df, {
+                            'FBC': st.column_config.NumberColumn('FBC', format="%d", width='small'),
+                            'Win%': pct_column(bar=True),
+                            'Points': st.column_config.NumberColumn('Points', format="%.1f"),
+                        }, fit=True)
                     else:
                         st.info("No event data available.")
 
                 with subtab2:
-                    st.markdown("<h4 class='section-header'>Doubles Partner Performance</h4>", unsafe_allow_html=True)
                     partner_df = get_partner_performance(df, selected_player)
                     if not partner_df.empty:
-                        partner_df['Win%'] = partner_df['Win%'].apply(format_pct)
-                        st.dataframe(
-                            partner_df,
-                            hide_index=True,
-                            width='stretch'
-                        )
+                        st.markdown("<p class='section-note'>Doubles record with each partner.</p>", unsafe_allow_html=True)
+                        partner_df['Win%'] = to_pct(partner_df['Win%'])
+                        show_table(partner_df, {'Win%': pct_column(bar=True),
+                                                'Points': st.column_config.NumberColumn('Points', format="%.1f")})
                     else:
                         st.info("No doubles partner data available.")
 
                 with subtab3:
-                    st.markdown("<h4 class='section-header'>Head-to-Head Record</h4>", unsafe_allow_html=True)
                     h2h_df = get_head_to_head(df, selected_player)
                     if not h2h_df.empty:
-                        h2h_df['Win%'] = h2h_df['Win%'].apply(format_pct)
-                        st.dataframe(
-                            h2h_df,
-                            hide_index=True,
-                            width='stretch'
-                        )
+                        st.markdown("<p class='section-note'>Record against each opponent, singles and doubles combined.</p>", unsafe_allow_html=True)
+                        h2h_df['Win%'] = to_pct(h2h_df['Win%'])
+                        show_table(h2h_df, {'Win%': pct_column(bar=True)})
                     else:
                         st.info("No head-to-head data available.")
 
                 with subtab4:
-                    st.markdown("<h4 class='section-header'>Performance by Course</h4>", unsafe_allow_html=True)
                     course_df = get_course_performance(df, selected_player)
                     if not course_df.empty:
-                        course_df['Win%'] = course_df['Win%'].apply(format_pct)
-                        st.dataframe(
-                            course_df,
-                            hide_index=True,
-                            width='stretch'
-                        )
+                        course_df['Win%'] = to_pct(course_df['Win%'])
+                        show_table(course_df, {'Win%': pct_column(bar=True),
+                                               'Points': st.column_config.NumberColumn('Points', format="%.1f")})
                     else:
                         st.info("No course data available.")
             else:
                 st.warning("No stats found for this player.")
 
     with tab2:
-        st.markdown("<h3 class='section-header'>🏆 Overall Leaderboard</h3>", unsafe_allow_html=True)
+        section("Career leaderboard", "Every match ever played. Click any column header to re-sort.")
 
-        # Sorting options
-        sort_col = st.selectbox(
-            "Sort by",
-            options=['Points', 'Win%', 'Matches', 'Events', 'Pts/Event'],
-            index=0
-        )
+        lb_data = leaderboard_base.copy()  # raw numbers for the highlight tiles
+        sort_col = st.segmented_control(
+            "Rank by", options=['Points', 'Win%', 'Matches', 'Pts/Event'],
+            default='Points', key="lb_sort",
+        ) or 'Points'
 
-        leaderboard = get_leaderboard(df)
-        lb_data = leaderboard.copy()  # preserve raw data for quick stats cards below
-        leaderboard = leaderboard.sort_values(sort_col, ascending=False).reset_index(drop=True)
-
-        # Add rank column
+        # Rate stats need a sample: a 1-0-0 cameo shouldn't outrank a 77-match career
+        min_matches = 20
+        if sort_col in ('Win%', 'Pts/Event'):
+            lb_data['_q'] = lb_data['Matches'] >= min_matches
+            leaderboard = lb_data.sort_values(['_q', sort_col], ascending=False).drop(columns='_q')
+            st.caption(f"Players with fewer than {min_matches} matches are listed after everyone else.")
+        else:
+            leaderboard = lb_data.sort_values(sort_col, ascending=False)
+        leaderboard = leaderboard.reset_index(drop=True)
         leaderboard.insert(0, 'Rank', range(1, len(leaderboard) + 1))
+        leaderboard['Win%'] = to_pct(leaderboard['Win%'])
 
-        # Format percentages
-        leaderboard['Win%'] = leaderboard['Win%'].apply(format_pct)
-        leaderboard['Pts/Event'] = leaderboard['Pts/Event'].apply(lambda x: f"{x:.2f}")
+        qualified = lb_data[lb_data['Matches'] >= 20]
+        top_points = lb_data.nlargest(1, 'Points').iloc[0]
+        top_matches = lb_data.nlargest(1, 'Matches').iloc[0]
+        tiles = [('Most points', top_points['Player'], f"{top_points['Points']:.1f} pts")]
+        if not qualified.empty:
+            top_winpct = qualified.nlargest(1, 'Win%').iloc[0]
+            tiles.append(('Best win % (20+ matches)', top_winpct['Player'], f"{top_winpct['Win%']:.1%}"))
+        tiles.append(('Most matches', top_matches['Player'], f"{top_matches['Matches']} matches"))
+        kpi_tiles(tiles)
 
-        # Display leaderboard with highlighting
-        st.dataframe(
-            leaderboard,
-            hide_index=True,
-            width='stretch',
-            column_config={
-                'Rank': st.column_config.NumberColumn('Rank', width='small'),
-                'Player': st.column_config.TextColumn('Player', width='medium'),
-                'Points': st.column_config.NumberColumn('Points', format="%.1f"),
-                'Record': st.column_config.TextColumn('Record', width='small'),
-                'Win%': st.column_config.TextColumn('Win%', width='small'),
-                'Matches': st.column_config.NumberColumn('Matches', width='small'),
-                'Events': st.column_config.NumberColumn('Events', width='small'),
-                'Pts/Event': st.column_config.TextColumn('Pts/Event', width='small'),
-            }
-        )
-
-        # Quick stats
-        st.markdown("<h4 class='section-header'>Quick Stats</h4>", unsafe_allow_html=True)
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            top_points = lb_data.nlargest(1, 'Points').iloc[0]
-            st.markdown(f"""
-            <div class="stat-card">
-                <div class="stat-value">{top_points['Player']}</div>
-                <div class="stat-label">Most Points ({top_points['Points']:.1f})</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with col2:
-            # Filter for players with at least 20 matches for meaningful win%
-            qualified = lb_data[lb_data['Matches'] >= 20]
-            if not qualified.empty:
-                top_winpct = qualified.nlargest(1, 'Win%').iloc[0]
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value">{top_winpct['Player']}</div>
-                    <div class="stat-label">Best Win% ({top_winpct['Win%']:.1%})</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-        with col3:
-            top_matches = lb_data.nlargest(1, 'Matches').iloc[0]
-            st.markdown(f"""
-            <div class="stat-card">
-                <div class="stat-value">{top_matches['Player']}</div>
-                <div class="stat-label">Most Matches ({top_matches['Matches']})</div>
-            </div>
-            """, unsafe_allow_html=True)
+        show_table(leaderboard, {
+            'Rank': st.column_config.NumberColumn('#', width='small'),
+            'Player': st.column_config.TextColumn('Player'),
+            'Points': st.column_config.NumberColumn('Points', format="%.1f"),
+            'Record': st.column_config.TextColumn('Record (W-L-T)'),
+            'Win%': pct_column(bar=True),
+            'Matches': st.column_config.NumberColumn('Matches'),
+            'Events': st.column_config.NumberColumn('Events'),
+            'Pts/Event': st.column_config.NumberColumn('Pts / event', format="%.2f"),
+        }, fit=True)
 
     with tab3:
-        st.markdown("<h3 class='section-header'>🏅 Cup Championships</h3>", unsafe_allow_html=True)
-
         if cups_df is not None:
-            st.markdown("""
-            This shows which players were on the **winning team** at each FBC event.
-            - **1** = On winning team
-            - **0** = On losing team
-            - **X** = Did not participate
-            """)
-
-            # Summary stats
             cups_summary = get_cups_summary(cups_df)
-
-            col1, col2, col3 = st.columns(3)
-
-            # Most cups won
             if cups_summary:
                 top_winner = cups_summary[0]
-                with col1:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value">{top_winner['Player']}</div>
-                        <div class="stat-label">Most Cups ({top_winner['Cups Won']})</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                # Best cup win percentage (min 5 cups played)
+                tiles = [('Most cups won', top_winner['Player'], f"{top_winner['Cups Won']} cups")]
                 qualified = [p for p in cups_summary if p['Cups Played'] >= 5]
                 if qualified:
                     best_pct = max(qualified, key=lambda x: x['Cup Win%'])
-                    with col2:
-                        st.markdown(f"""
-                        <div class="stat-card">
-                            <div class="stat-value">{best_pct['Player']}</div>
-                            <div class="stat-label">Best Cup Win% ({best_pct['Cup Win%']:.1%})</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                # Most cups played
+                    tiles.append(('Best cup win % (5+ played)', best_pct['Player'], f"{best_pct['Cup Win%']:.1%}"))
                 most_played = max(cups_summary, key=lambda x: x['Cups Played'])
-                with col3:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value">{most_played['Player']}</div>
-                        <div class="stat-label">Most Cups Played ({most_played['Cups Played']})</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                tiles.append(('Most cups played', most_played['Player'], f"{most_played['Cups Played']} cups"))
+                kpi_tiles(tiles)
 
             # ----- Cup Results by Event (team scores, captains, margins) -----
-            st.markdown("<h4 class='section-header'>Cup Results by Event</h4>", unsafe_allow_html=True)
-            st.markdown(
-                "Final team result for every FBC. **Winner/Loser Total** are the team point totals "
-                "(the FTAS tiebreaker counts once, as 0.5 to the winning team), **Margin** is the gap "
-                "between them, and **Highest Individual** is the event's top individual point scorer. "
-                "**Rain** and **Notes** come from the Cup Info tab."
-            )
+            section("Results by event",
+                    "Teams are named for their captain. Scores count the FTAS tiebreaker once "
+                    "(0.5 to the winning team). Top scorer is the event's highest individual points total.")
             try:
                 cup_results = get_cup_results_table(df)
-                st.dataframe(
-                    cup_results[['FBC', 'Location', 'Rain', 'Winning Captain', 'Losing Captain',
-                                 'Winner Total', 'Loser Total', 'Margin', 'Highest Individual',
-                                 'Notes']],
-                    hide_index=True,
-                    width='stretch',
+                cup_results['Winner'] = cup_results['Winning Captain'].map(team_label)
+                cup_results['Runner-up'] = cup_results['Losing Captain'].map(team_label)
+                cup_results['Score'] = cup_results.apply(
+                    lambda r: f"{fmt_pts(r['Winner Total'])} – {fmt_pts(r['Loser Total'])}", axis=1)
+                cup_results = cup_results.sort_values('FBC', ascending=False)
+                # Rain stays in the Ask Claude context but is left out of this table
+                show_table(
+                    cup_results[['FBC', 'Location', 'Winner', 'Runner-up', 'Score', 'Margin',
+                                 'Highest Individual']],
+                    {
+                        'FBC': st.column_config.NumberColumn('FBC', format="%d", width='small'),
+                        'Margin': st.column_config.NumberColumn('Margin', format="%.1f", width='small'),
+                        'Highest Individual': st.column_config.TextColumn('Top scorer'),
+                    },
+                    fit=True,
                 )
+                # Notes are sparse, so list them under the table rather than as a mostly-empty column
+                noted = cup_results[cup_results['Notes'].astype(str).str.strip() != '']
+                for _, r in noted.iterrows():
+                    st.caption(f"**FBC {r['FBC']}:** {r['Notes']}")
             except Exception as e:
                 st.warning(f"Could not build the cup results table: {e}")
 
-            st.markdown("<h4 class='section-header'>Cup Results by Player</h4>", unsafe_allow_html=True)
-
-            # Sort options
-            sort_by = st.selectbox(
-                "Sort by",
-                options=['Total', 'Win%', 'Played', 'Player'],
-                index=0,
-                key="cups_sort"
-            )
+            section("Results by player", "Was each player on the winning side?")
+            st.markdown(f"""
+            <div class="legend-chips">
+              <span><i style="background:{COLORS['primary_soft']};color:{COLORS['win']}">W</i>won the cup</span>
+              <span><i style="color:{COLORS['loss']};border:1px solid {COLORS['border']}">L</i>lost</span>
+              <span><i style="color:#B7BDB6;border:1px solid {COLORS['border']}">·</i>didn't play</span>
+            </div>""", unsafe_allow_html=True)
 
             display_df = cups_df.copy()
+            display_df = display_df.sort_values(['Total', 'Win%'], ascending=False)
+            display_df['Win%'] = to_pct(display_df['Win%'].fillna(0))
 
-            if sort_by == 'Player':
-                display_df = display_df.sort_values('Player')
-            elif sort_by == 'Win%':
-                display_df = display_df.sort_values('Win%', ascending=False)
-            else:
-                display_df = display_df.sort_values(sort_by, ascending=False)
-
-            # Format Win% as percentage after sorting
-            display_df['Win%'] = display_df['Win%'].apply(lambda x: f"{x:.1%}" if pd.notna(x) else "")
-
-            # Show the table. Cast the per-cup 1/0/X cells to uniform strings —
-            # mixed int/str columns fail Arrow serialization and spam the server
-            # log with a traceback on every render.
+            # Per-cup 1/0/X cells -> W / L / · (uniform strings also keep Arrow happy:
+            # mixed int/str columns fail serialization and spam the server log).
             fbc_col_names = [c for _, c in _fbc_columns(display_df)]
             for c in fbc_col_names:
                 display_df[c] = display_df[c].map(
-                    lambda v: str(int(v)) if v in (0, 1, 0.0, 1.0) else ('' if pd.isna(v) else str(v)))
-            st.dataframe(
-                display_df[['Player'] + fbc_col_names + ['Total', 'Played', 'Win%']],
-                hide_index=True,
-                width='stretch'
-            )
+                    lambda v: CUP_CELL.get(str(int(v)) if v in (0, 1, 0.0, 1.0) else str(v).strip().upper(), '·')
+                    if pd.notna(v) else '·')
+            display_df = display_df[['Player'] + fbc_col_names + ['Total', 'Played', 'Win%']]
+            styled = display_df.style.map(_cup_cell_style, subset=fbc_col_names)
+            cfg = {c: st.column_config.TextColumn(c.replace('FBC ', ''), width=40) for c in fbc_col_names}
+            cfg.update({
+                'Player': st.column_config.TextColumn('Player', pinned=True, width=110),
+                'Total': st.column_config.NumberColumn('Won'),
+                'Played': st.column_config.NumberColumn('Played'),
+                'Win%': pct_column(),
+            })
+            show_table(styled, cfg, fit=True)
         else:
             st.error("Cups data could not be loaded.")
 
     with tab_records:
-        st.markdown("<h3 class='section-header'>📜 Records & Streaks</h3>", unsafe_allow_html=True)
-
         streaks = get_streak_records(df)
         team_results = get_fbc_team_results(df)
 
@@ -2527,181 +2536,116 @@ def main():
             biggest = [r for r in team_results if abs(r['margin'] - max_margin) < 1e-9]
             decided = [r for r in team_results if not r['tie']]
             closest = min(decided, key=lambda x: x['margin']) if decided else None
+            tiles = [('Biggest cup margin', ' & '.join(team_label(b['winner']) for b in biggest),
+                      f"{max_margin:.1f} pts · " + ', '.join(f"FBC {b['fbc']}" for b in biggest))]
+            if closest:
+                tiles.append(('Closest cup', team_label(closest['winner']),
+                              f"by {closest['margin']:.1f} at FBC {closest['fbc']}"))
+            if streaks['win']:
+                top_streak = streaks['win'][0]
+                tiles.append(('Longest win streak', top_streak['Player'],
+                              f"{top_streak['Streak']} matches · {top_streak['Span']}"))
+            kpi_tiles(tiles)
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                names = ' & '.join(b['winner'] for b in biggest)
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value">{names}</div>
-                    <div class="stat-label">Biggest Cup Margin ({max_margin:.1f} pts{', tied' if len(biggest) > 1 else ''})</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col2:
-                if closest:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value">{closest['winner']}</div>
-                        <div class="stat-label">Closest Cup (by {closest['margin']:.1f} at FBC {closest['fbc']})</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-            with col3:
-                if streaks['win']:
-                    top_streak = streaks['win'][0]
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value">{top_streak['Player']}</div>
-                        <div class="stat-label">Longest Win Streak ({top_streak['Streak']} matches, {top_streak['Span']})</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-        # Streak tables
-        col1, col2 = st.columns(2)
+        streak_cfg = {'Streak': st.column_config.NumberColumn('Matches', width='small')}
+        col1, col2 = st.columns(2, gap="large")
         with col1:
-            st.markdown("<h4 class='section-header'>🔥 Longest Win Streaks</h4>", unsafe_allow_html=True)
-            st.dataframe(pd.DataFrame(streaks['win'][:10]), hide_index=True, width='stretch')
+            section("Longest win streaks", level=4)
+            show_table(pd.DataFrame(streaks['win'][:10]), streak_cfg)
         with col2:
-            st.markdown("<h4 class='section-header'>🛡️ Longest Unbeaten Streaks</h4>", unsafe_allow_html=True)
-            st.dataframe(pd.DataFrame(streaks['unbeaten'][:10]), hide_index=True, width='stretch')
+            section("Longest unbeaten streaks", level=4)
+            show_table(pd.DataFrame(streaks['unbeaten'][:10]), streak_cfg)
 
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2, gap="large")
         with col1:
-            st.markdown("<h4 class='section-header'>🥶 Longest Losing Streaks</h4>", unsafe_allow_html=True)
-            st.dataframe(pd.DataFrame(streaks['loss'][:10]), hide_index=True, width='stretch')
+            section("Longest losing streaks", level=4)
+            show_table(pd.DataFrame(streaks['loss'][:10]), streak_cfg)
         with col2:
-            st.markdown("<h4 class='section-header'>⚡ Active Streaks (entering next cup)</h4>", unsafe_allow_html=True)
+            section("Active streaks", "Heading into the next cup.", level=4)
             active = [s for s in streaks['current'] if s['Length'] >= 2 and s['Type'] != 'T']
             if active:
-                st.dataframe(pd.DataFrame(active[:10])[['Player', 'Streak']], hide_index=True, width='stretch')
+                show_table(pd.DataFrame(active[:10])[['Player', 'Streak']])
             else:
                 st.info("No active streaks of 2+ matches.")
 
-        # Biggest match wins
-        st.markdown("<h4 class='section-header'>🏌️ Most Lopsided Match Wins</h4>", unsafe_allow_html=True)
+        section("Most lopsided match wins", level=4)
         blowouts = get_biggest_match_wins(df)
         if blowouts:
-            st.dataframe(pd.DataFrame(blowouts[:10]), hide_index=True, width='stretch')
+            show_table(pd.DataFrame(blowouts[:10]), {'FBC': st.column_config.NumberColumn('FBC', format="%d")})
         else:
             st.info("No match-play margins recorded.")
 
-        # Perfect events
-        st.markdown("<h4 class='section-header'>💯 Perfect Events (no losses, 5+ matches)</h4>", unsafe_allow_html=True)
+        section("Perfect events", "No losses across 5+ matches at one cup.", level=4)
         perfect = get_perfect_events(df)
         if perfect:
             pdf_ = pd.DataFrame(perfect)[['Player', 'FBC', 'Location', 'Record', 'Points']]
-            st.dataframe(pdf_, hide_index=True, width='stretch')
+            show_table(pdf_, {'FBC': st.column_config.NumberColumn('FBC', format="%d"),
+                              'Points': st.column_config.NumberColumn('Points', format="%.1f")})
         else:
             st.info("Nobody has finished an event unbeaten (5+ matches) — yet.")
 
-        # Consecutive cups + best partnerships
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2, gap="large")
         with col1:
-            st.markdown("<h4 class='section-header'>🏆 Most Consecutive Cups Won</h4>", unsafe_allow_html=True)
+            section("Most consecutive cups won", "Skipped cups don't break a run.", level=4)
             if cups_df is not None:
                 consec = get_consecutive_cup_wins(cups_df)
-                st.dataframe(pd.DataFrame(consec[:10]), hide_index=True, width='stretch')
+                show_table(pd.DataFrame(consec[:10]),
+                           {'Consecutive Cups Won': st.column_config.NumberColumn('Cups', width='small')})
             else:
                 st.info("Cups data unavailable.")
         with col2:
-            st.markdown("<h4 class='section-header'>👥 Best Partnerships (min 5 matches)</h4>", unsafe_allow_html=True)
+            section("Best partnerships", "Minimum 5 matches together.", level=4)
             partnerships = [p for p in get_all_partnership_stats(df) if p['Matches'] >= 5]
             partnerships.sort(key=lambda x: (x['Win%'], x['Matches']), reverse=True)
             if partnerships:
                 pp = pd.DataFrame(partnerships[:10])[['Partnership', 'Record', 'Win%', 'Matches']]
-                pp['Win%'] = pp['Win%'].apply(format_pct)
-                st.dataframe(pp, hide_index=True, width='stretch')
+                pp['Win%'] = to_pct(pp['Win%'])
+                show_table(pp, {'Win%': pct_column()})
 
     with tab4:
-        st.markdown("<h3 class='section-header'>⚔️ Tale of the Tape</h3>", unsafe_allow_html=True)
-        st.markdown("Compare any two players head-to-head across all metrics.")
+        section("Tale of the Tape", "Compare any two players across every metric.")
 
-        # Player selection
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2, gap="large")
         with col1:
-            st.markdown(f"<div style='text-align: center; color: {COLORS['primary']}; font-weight: bold;'>PLAYER 1</div>", unsafe_allow_html=True)
-            tape_player1 = st.selectbox("Select Player 1", options=all_players, index=0, key="tape_p1")
+            st.markdown("<div class='side-label p1'>Player 1</div>", unsafe_allow_html=True)
+            tape_player1 = st.selectbox("Player 1", options=all_players, index=_default_idx(0),
+                                        key="tape_p1", label_visibility="collapsed")
         with col2:
-            st.markdown(f"<div style='text-align: center; color: {COLORS['loss']}; font-weight: bold;'>PLAYER 2</div>", unsafe_allow_html=True)
-            # Default to a different player
-            default_p2_idx = 1 if len(all_players) > 1 else 0
-            tape_player2 = st.selectbox("Select Player 2", options=all_players, index=default_p2_idx, key="tape_p2")
+            st.markdown("<div class='side-label p2'>Player 2</div>", unsafe_allow_html=True)
+            tape_player2 = st.selectbox("Player 2", options=all_players, index=_default_idx(1),
+                                        key="tape_p2", label_visibility="collapsed")
 
         if tape_player1 and tape_player2 and tape_player1 != tape_player2:
-            st.markdown("---")
-
-            # Get stats for both players
             p1_stats = get_player_stats(df, tape_player1)
             p2_stats = get_player_stats(df, tape_player2)
 
             if p1_stats and p2_stats:
-                # Overall Records - Side by Side
-                st.markdown("<h4 class='section-header'>Overall Career Records</h4>", unsafe_allow_html=True)
+                section("Career", level=4)
+                col1, col2 = st.columns(2, gap="large")
+                for col, name, s_, variant in ((col1, tape_player1, p1_stats, 'p1'),
+                                               (col2, tape_player2, p2_stats, 'p2')):
+                    with col:
+                        kpi_tiles([
+                            ('Record', s_['record']),
+                            ('Win %', f"{s_['win_pct']:.1%}"),
+                            ('Points', f"{s_['points']:.1f}", f"{s_['events']} events"),
+                        ], variant=variant)
 
-                col1, col2, col3 = st.columns([2, 1, 2])
-
-                with col1:
-                    st.markdown(f"""
-                    <div class="stat-card" style="border-left-color: {COLORS['primary']};">
-                        <div class="stat-value">{p1_stats['record']}</div>
-                        <div class="stat-label">{tape_player1}</div>
-                        <div style="margin-top: 0.5rem;">
-                            <span style="color: {COLORS['primary']};">{p1_stats['win_pct']:.1%} Win</span> |
-                            {p1_stats['points']:.1f} pts | {p1_stats['events']} events
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                with col2:
-                    st.markdown("""
-                    <div style="text-align: center; padding: 2rem; font-size: 2rem; font-weight: bold;">
-                        VS
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                with col3:
-                    st.markdown(f"""
-                    <div class="stat-card" style="border-left-color: {COLORS['loss']};">
-                        <div class="stat-value">{p2_stats['record']}</div>
-                        <div class="stat-label">{tape_player2}</div>
-                        <div style="margin-top: 0.5rem;">
-                            <span style="color: {COLORS['loss']};">{p2_stats['win_pct']:.1%} Win</span> |
-                            {p2_stats['points']:.1f} pts | {p2_stats['events']} events
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                # Direct Head-to-Head
-                st.markdown("<h4 class='section-header'>Direct Head-to-Head</h4>", unsafe_allow_html=True)
+                section("Direct head-to-head", level=4)
                 h2h = get_direct_h2h(df, tape_player1, tape_player2)
-
                 if h2h['matches'] > 0:
-                    col1, col2, col3 = st.columns([2, 1, 2])
-                    with col1:
-                        st.markdown(f"""
-                        <div class="stat-card" style="border-left-color: {COLORS['win'] if h2h['wins'] > h2h['losses'] else COLORS['primary']};">
-                            <div class="stat-value">{h2h['wins']}</div>
-                            <div class="stat-label">Wins vs {tape_player2}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with col2:
-                        st.markdown(f"""
-                        <div style="text-align: center; padding: 1rem;">
-                            <div style="font-size: 1.2rem; color: {COLORS['tie']};">{h2h['ties']} Ties</div>
-                            <div style="font-size: 0.9rem; color: #666;">{h2h['matches']} meetings</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with col3:
-                        st.markdown(f"""
-                        <div class="stat-card" style="border-left-color: {COLORS['win'] if h2h['losses'] > h2h['wins'] else COLORS['loss']};">
-                            <div class="stat-value">{h2h['losses']}</div>
-                            <div class="stat-label">Wins vs {tape_player1}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                    total = h2h['matches']
+                    p1_share = (h2h['wins'] + 0.5 * h2h['ties']) / total * 100
+                    kpi_tiles([
+                        (f"{tape_player1} wins", h2h['wins']),
+                        ('Halved', h2h['ties'], f"{total} meetings"),
+                        (f"{tape_player2} wins", h2h['losses']),
+                    ])
+                    vs_bar(tape_player1, p1_share, tape_player2, 100 - p1_share)
                 else:
                     st.info(f"{tape_player1} and {tape_player2} have never faced each other directly.")
 
-                # Win % by Format
-                st.markdown("<h4 class='section-header'>Win % by Format</h4>", unsafe_allow_html=True)
+                section("By format", level=4)
                 p1_formats = get_stats_by_format(df, tape_player1)
                 p2_formats = get_stats_by_format(df, tape_player2)
 
@@ -2711,242 +2655,111 @@ def main():
                     p2_f = p2_formats.get(fmt, {})
                     format_data.append({
                         'Format': fmt,
-                        f'{tape_player1}': f"{p1_f.get('wins', 0)}-{p1_f.get('losses', 0)}-{p1_f.get('ties', 0)} ({p1_f.get('win_pct', 0):.1%})" if p1_f.get('matches', 0) > 0 else "N/A",
-                        f'{tape_player2}': f"{p2_f.get('wins', 0)}-{p2_f.get('losses', 0)}-{p2_f.get('ties', 0)} ({p2_f.get('win_pct', 0):.1%})" if p2_f.get('matches', 0) > 0 else "N/A",
+                        f'{tape_player1}': f"{p1_f.get('wins', 0)}-{p1_f.get('losses', 0)}-{p1_f.get('ties', 0)} ({p1_f.get('win_pct', 0):.1%})" if p1_f.get('matches', 0) > 0 else "—",
+                        f'{tape_player2}': f"{p2_f.get('wins', 0)}-{p2_f.get('losses', 0)}-{p2_f.get('ties', 0)} ({p2_f.get('win_pct', 0):.1%})" if p2_f.get('matches', 0) > 0 else "—",
                         'Edge': tape_player1 if p1_f.get('win_pct', 0) > p2_f.get('win_pct', 0) else (tape_player2 if p2_f.get('win_pct', 0) > p1_f.get('win_pct', 0) else 'Even')
                     })
+                show_table(pd.DataFrame(format_data))
 
-                st.dataframe(pd.DataFrame(format_data), hide_index=True, width='stretch')
-
-                # Best/Worst Courses
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    st.markdown(f"<h4 class='section-header'>{tape_player1}'s Courses</h4>", unsafe_allow_html=True)
-                    p1_best, p1_worst = get_best_worst_courses(df, tape_player1)
-                    if p1_best:
-                        st.markdown("**Best Courses:**")
-                        for c in p1_best:
-                            st.markdown(f"- {c['course']}: {c['wins']}-{c['losses']}-{c['ties']} ({c['win_pct']:.1%})")
-                    if p1_worst and p1_worst != p1_best:
-                        st.markdown("**Worst Courses:**")
-                        for c in p1_worst:
-                            st.markdown(f"- {c['course']}: {c['wins']}-{c['losses']}-{c['ties']} ({c['win_pct']:.1%})")
-
-                with col2:
-                    st.markdown(f"<h4 class='section-header'>{tape_player2}'s Courses</h4>", unsafe_allow_html=True)
-                    p2_best, p2_worst = get_best_worst_courses(df, tape_player2)
-                    if p2_best:
-                        st.markdown("**Best Courses:**")
-                        for c in p2_best:
-                            st.markdown(f"- {c['course']}: {c['wins']}-{c['losses']}-{c['ties']} ({c['win_pct']:.1%})")
-                    if p2_worst and p2_worst != p2_best:
-                        st.markdown("**Worst Courses:**")
-                        for c in p2_worst:
-                            st.markdown(f"- {c['course']}: {c['wins']}-{c['losses']}-{c['ties']} ({c['win_pct']:.1%})")
-
-                # Best Partners
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    st.markdown(f"<h4 class='section-header'>{tape_player1}'s Best Partners</h4>", unsafe_allow_html=True)
-                    p1_partners = get_best_partners(df, tape_player1)
-                    if p1_partners:
-                        for p in p1_partners:
-                            st.markdown(f"- {p['partner']}: {p['wins']}-{p['losses']}-{p['ties']} ({p['win_pct']:.1%})")
-                    else:
-                        st.info("No doubles partner data.")
-
-                with col2:
-                    st.markdown(f"<h4 class='section-header'>{tape_player2}'s Best Partners</h4>", unsafe_allow_html=True)
-                    p2_partners = get_best_partners(df, tape_player2)
-                    if p2_partners:
-                        for p in p2_partners:
-                            st.markdown(f"- {p['partner']}: {p['wins']}-{p['losses']}-{p['ties']} ({p['win_pct']:.1%})")
-                    else:
-                        st.info("No doubles partner data.")
+                pct_cfg = {'Win%': pct_column()}
+                col1, col2 = st.columns(2, gap="large")
+                for col, name in ((col1, tape_player1), (col2, tape_player2)):
+                    with col:
+                        best, worst = get_best_worst_courses(df, name)
+                        section(f"{name}: best courses", level=4)
+                        if best:
+                            show_table(_record_rows(best, 'course', 'Course'), pct_cfg)
+                        else:
+                            st.info("Not enough course data.")
+                        if worst and worst != best:
+                            section(f"{name}: toughest courses", level=4)
+                            show_table(_record_rows(worst, 'course', 'Course'), pct_cfg)
+                        section(f"{name}: best partners", level=4)
+                        partners = get_best_partners(df, name)
+                        if partners:
+                            show_table(_record_rows(partners, 'partner', 'Partner'), pct_cfg)
+                        else:
+                            st.info("No doubles partner data.")
 
         elif tape_player1 == tape_player2:
             st.warning("Please select two different players to compare.")
 
     with tab5:
-        st.markdown("<h3 class='section-header'>🎯 Match Predictor</h3>", unsafe_allow_html=True)
-        st.markdown("Predict match outcomes based on historical performance data.")
+        section("Match Predictor", "Win probability from career form, head-to-head and recent results.")
 
-        # Match type selection
-        match_type = st.radio("Match Type", ["Singles", "Doubles"], horizontal=True, key="pred_match_type")
+        match_type = st.segmented_control("Match type", ["Singles", "Doubles"], default="Singles",
+                                          key="pred_match_type") or "Singles"
+        all_courses = sorted([c for c in df['Course'].dropna().unique() if isinstance(c, str)])
+
+        def _render_prediction(prediction, left, right, left_col, right_col):
+            section("Prediction", level=4)
+            col1, col2 = st.columns(2, gap="large")
+            with col1:
+                kpi_tiles([(left, f"{prediction['p1_prob']:.0f}%", 'favorite' if prediction['p1_prob'] > 50 else '')], variant='p1')
+            with col2:
+                kpi_tiles([(right, f"{prediction['p2_prob']:.0f}%", 'favorite' if prediction['p2_prob'] > 50 else '')], variant='p2')
+            vs_bar(left, prediction['p1_prob'], right, prediction['p2_prob'])
+
+            section("What's driving it", level=4)
+            if prediction['factors']:
+                factors_df = pd.DataFrame(prediction['factors']).rename(columns={
+                    'factor': 'Factor', 'p1_value': left_col, 'p2_value': right_col, 'edge': 'Edge'})
+                show_table(factors_df[['Factor', left_col, right_col, 'Edge']])
+            else:
+                st.info("Not enough historical data to analyze factors.")
 
         if match_type == "Singles":
-            col1, col2 = st.columns(2)
+            col1, col2 = st.columns(2, gap="large")
             with col1:
-                st.markdown(f"<div style='text-align: center; font-weight: bold;'>PLAYER 1</div>", unsafe_allow_html=True)
-                pred_p1 = st.selectbox("Select Player 1", options=all_players, index=0, key="pred_singles_p1")
+                st.markdown("<div class='side-label p1'>Player 1</div>", unsafe_allow_html=True)
+                pred_p1 = st.selectbox("Player 1", options=all_players, index=_default_idx(0),
+                                       key="pred_singles_p1", label_visibility="collapsed")
             with col2:
-                st.markdown(f"<div style='text-align: center; font-weight: bold;'>PLAYER 2</div>", unsafe_allow_html=True)
-                default_idx = 1 if len(all_players) > 1 else 0
-                pred_p2 = st.selectbox("Select Player 2", options=all_players, index=default_idx, key="pred_singles_p2")
+                st.markdown("<div class='side-label p2'>Player 2</div>", unsafe_allow_html=True)
+                pred_p2 = st.selectbox("Player 2", options=all_players, index=_default_idx(1),
+                                       key="pred_singles_p2", label_visibility="collapsed")
 
-            # Optional course selection
-            all_courses = sorted([c for c in df['Course'].dropna().unique() if isinstance(c, str)])
-            pred_course = st.selectbox("Course (optional)", options=["Any Course"] + all_courses, key="pred_course_singles")
-            pred_course = None if pred_course == "Any Course" else pred_course
+            pred_course = st.selectbox("Course (optional)", options=["Any course"] + all_courses, key="pred_course_singles")
+            pred_course = None if pred_course == "Any course" else pred_course
 
             if pred_p1 != pred_p2:
-                if st.button("Predict Match", type="primary", key="predict_singles"):
+                if st.button("Predict match", type="primary", key="predict_singles"):
                     prediction = predict_match(df, pred_p1, pred_p2, course=pred_course)
-
-                    st.markdown("---")
-                    st.markdown("<h4 class='section-header'>Prediction</h4>", unsafe_allow_html=True)
-
-                    # Visual probability bar
-                    col1, col2, col3 = st.columns([2, 1, 2])
-
-                    with col1:
-                        color1 = COLORS['win'] if prediction['p1_prob'] > 50 else COLORS['primary']
-                        st.markdown(f"""
-                        <div class="stat-card" style="border-left-color: {color1};">
-                            <div class="stat-value" style="color: {color1};">{prediction['p1_prob']:.0f}%</div>
-                            <div class="stat-label">{pred_p1}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    with col2:
-                        st.markdown("""
-                        <div style="text-align: center; padding: 1.5rem;">
-                            <div style="font-size: 1.5rem;">⚡</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    with col3:
-                        color2 = COLORS['win'] if prediction['p2_prob'] > 50 else COLORS['loss']
-                        st.markdown(f"""
-                        <div class="stat-card" style="border-left-color: {color2};">
-                            <div class="stat-value" style="color: {color2};">{prediction['p2_prob']:.0f}%</div>
-                            <div class="stat-label">{pred_p2}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    # Probability bar
-                    st.markdown(f"""
-                    <div style="background: linear-gradient(to right, {COLORS['primary']} {prediction['p1_prob']:.0f}%, {COLORS['loss']} {prediction['p1_prob']:.0f}%);
-                                height: 30px; border-radius: 15px; margin: 1rem 0;">
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                    # Factors breakdown
-                    st.markdown("<h4 class='section-header'>Analysis Factors</h4>", unsafe_allow_html=True)
-
-                    if prediction['factors']:
-                        factors_df = pd.DataFrame(prediction['factors'])
-                        factors_df = factors_df.rename(columns={
-                            'factor': 'Factor',
-                            'p1_value': pred_p1,
-                            'p2_value': pred_p2,
-                            'edge': 'Edge',
-                            'impact': 'Impact'
-                        })
-                        st.dataframe(factors_df[['Factor', pred_p1, pred_p2, 'Edge']], hide_index=True, width='stretch')
-                    else:
-                        st.info("Not enough historical data to analyze factors.")
+                    _render_prediction(prediction, pred_p1, pred_p2, pred_p1, pred_p2)
             else:
                 st.warning("Please select two different players.")
 
         else:  # Doubles
-            st.markdown("**Team 1**")
-            col1, col2 = st.columns(2)
+            col1, col2 = st.columns(2, gap="large")
             with col1:
-                pred_d1_p1 = st.selectbox("Player 1A", options=all_players, index=0, key="pred_d1_p1")
+                st.markdown("<div class='side-label p1'>Team 1</div>", unsafe_allow_html=True)
+                pred_d1_p1 = st.selectbox("Team 1 — player A", options=all_players, index=_default_idx(0), key="pred_d1_p1")
+                pred_d1_p2 = st.selectbox("Team 1 — player B", options=all_players, index=_default_idx(3), key="pred_d1_p2")
             with col2:
-                default_idx = 1 if len(all_players) > 1 else 0
-                pred_d1_p2 = st.selectbox("Player 1B", options=all_players, index=default_idx, key="pred_d1_p2")
+                st.markdown("<div class='side-label p2'>Team 2</div>", unsafe_allow_html=True)
+                pred_d2_p1 = st.selectbox("Team 2 — player A", options=all_players, index=_default_idx(1), key="pred_d2_p1")
+                pred_d2_p2 = st.selectbox("Team 2 — player B", options=all_players, index=_default_idx(2), key="pred_d2_p2")
 
-            st.markdown("**Team 2**")
-            col1, col2 = st.columns(2)
-            with col1:
-                default_idx = 2 if len(all_players) > 2 else 0
-                pred_d2_p1 = st.selectbox("Player 2A", options=all_players, index=default_idx, key="pred_d2_p1")
-            with col2:
-                default_idx = 3 if len(all_players) > 3 else 0
-                pred_d2_p2 = st.selectbox("Player 2B", options=all_players, index=default_idx, key="pred_d2_p2")
+            pred_course_d = st.selectbox("Course (optional)", options=["Any course"] + all_courses, key="pred_course_doubles")
+            pred_course_d = None if pred_course_d == "Any course" else pred_course_d
 
-            # Optional course selection
-            all_courses = sorted([c for c in df['Course'].dropna().unique() if isinstance(c, str)])
-            pred_course_d = st.selectbox("Course (optional)", options=["Any Course"] + all_courses, key="pred_course_doubles")
-            pred_course_d = None if pred_course_d == "Any Course" else pred_course_d
-
-            # Validate no duplicate players
             team1 = {pred_d1_p1, pred_d1_p2}
             team2 = {pred_d2_p1, pred_d2_p2}
 
             if len(team1) == 2 and len(team2) == 2 and not team1.intersection(team2):
-                if st.button("Predict Match", type="primary", key="predict_doubles"):
-                    # For doubles, we combine factors from both team members
+                if st.button("Predict match", type="primary", key="predict_doubles"):
                     prediction = predict_match(df, pred_d1_p1, pred_d2_p1, course=pred_course_d,
                                               is_doubles=True, partner1=pred_d1_p2, partner2=pred_d2_p2)
-
-                    st.markdown("---")
-                    st.markdown("<h4 class='section-header'>Prediction</h4>", unsafe_allow_html=True)
-
-                    col1, col2, col3 = st.columns([2, 1, 2])
-
-                    with col1:
-                        color1 = COLORS['win'] if prediction['p1_prob'] > 50 else COLORS['primary']
-                        st.markdown(f"""
-                        <div class="stat-card" style="border-left-color: {color1};">
-                            <div class="stat-value" style="color: {color1};">{prediction['p1_prob']:.0f}%</div>
-                            <div class="stat-label">{pred_d1_p1} / {pred_d1_p2}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    with col2:
-                        st.markdown("""
-                        <div style="text-align: center; padding: 1.5rem;">
-                            <div style="font-size: 1.5rem;">⚡</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    with col3:
-                        color2 = COLORS['win'] if prediction['p2_prob'] > 50 else COLORS['loss']
-                        st.markdown(f"""
-                        <div class="stat-card" style="border-left-color: {color2};">
-                            <div class="stat-value" style="color: {color2};">{prediction['p2_prob']:.0f}%</div>
-                            <div class="stat-label">{pred_d2_p1} / {pred_d2_p2}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    # Probability bar
-                    st.markdown(f"""
-                    <div style="background: linear-gradient(to right, {COLORS['primary']} {prediction['p1_prob']:.0f}%, {COLORS['loss']} {prediction['p1_prob']:.0f}%);
-                                height: 30px; border-radius: 15px; margin: 1rem 0;">
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                    # Factors breakdown
-                    st.markdown("<h4 class='section-header'>Analysis Factors</h4>", unsafe_allow_html=True)
-
-                    if prediction['factors']:
-                        factors_df = pd.DataFrame(prediction['factors'])
-                        factors_df = factors_df.rename(columns={
-                            'factor': 'Factor',
-                            'p1_value': f"{pred_d1_p1}/{pred_d1_p2}",
-                            'p2_value': f"{pred_d2_p1}/{pred_d2_p2}",
-                            'edge': 'Edge',
-                            'impact': 'Impact'
-                        })
-                        st.dataframe(factors_df[['Factor', f"{pred_d1_p1}/{pred_d1_p2}", f"{pred_d2_p1}/{pred_d2_p2}", 'Edge']], hide_index=True, width='stretch')
-                    else:
-                        st.info("Not enough historical data to analyze factors.")
+                    _render_prediction(prediction,
+                                       f"{pred_d1_p1} & {pred_d1_p2}", f"{pred_d2_p1} & {pred_d2_p2}",
+                                       f"{pred_d1_p1}/{pred_d1_p2}", f"{pred_d2_p1}/{pred_d2_p2}")
             else:
                 st.warning("Please select 4 different players (no player can be on both teams or appear twice).")
 
     with tab6:
-        st.markdown("<h3 class='section-header'>Ask Claude About FBC Data</h3>", unsafe_allow_html=True)
-
-        st.markdown("""
-        Ask any question about FBC tournament data - player stats, head-to-head records,
-        course performance, historical trends, and more! **Follow-up questions work** —
-        Claude remembers the conversation (e.g. ask about a player, then "what about in singles?").
-        """)
+        section("Ask Claude",
+                "Ask anything about FBC history — player stats, head-to-heads, courses, trends. "
+                "Follow-ups work: ask about a player, then “what about in singles?”")
 
         # Initialize session state
         if 'claude_history' not in st.session_state:
@@ -2955,9 +2768,6 @@ def main():
             st.session_state.claude_question = ""
         if 'submit_question' not in st.session_state:
             st.session_state.submit_question = False
-
-        # Example questions
-        st.markdown("**Try these example questions:**")
 
         example_questions = [
             "Who has won the most cups?",
@@ -2968,16 +2778,13 @@ def main():
             "What was the closest cup ever?"
         ]
 
-        # Create columns for example question buttons
-        cols = st.columns(2)
-        for i, question in enumerate(example_questions):
-            with cols[i % 2]:
-                if st.button(question, key=f"example_{i}", width='stretch'):
-                    st.session_state.claude_question = question
-                    st.session_state.submit_question = True
-                    st.rerun()
-
-        st.markdown("---")
+        if not st.session_state.claude_history:
+            picked = st.pills("Try one", example_questions, key="claude_examples")
+            if picked:
+                st.session_state.claude_question = picked
+                st.session_state.submit_question = True
+                st.session_state.pop("claude_examples", None)
+                st.rerun()
 
         # Conversation so far (renders Claude's markdown natively)
         for turn in st.session_state.claude_history:
@@ -2988,16 +2795,16 @@ def main():
 
         # Form for question submission (Enter key or button both work)
         in_conversation = len(st.session_state.claude_history) > 0
-        with st.form("claude_question_form", clear_on_submit=True):
+        with st.form("claude_question_form", clear_on_submit=True, border=False):
             user_question = st.text_input(
-                "Your question:" if not in_conversation else "Ask a follow-up:",
+                "Your question" if not in_conversation else "Ask a follow-up",
                 placeholder="e.g., Who has the best overall win percentage?" if not in_conversation
                             else "e.g., What about in doubles?",
                 key="question_input"
             )
-            form_submitted = st.form_submit_button("Ask Claude", type="primary", width='stretch')
+            form_submitted = st.form_submit_button("Ask", type="primary")
 
-        # Resolve what to ask (typed question, or auto-submit from an example button)
+        # Resolve what to ask (typed question, or auto-submit from an example)
         question_to_ask = None
         if form_submitted:
             if user_question.strip():
@@ -3025,45 +2832,37 @@ def main():
                     except Exception as e:
                         st.error(f"Error getting response from Claude: {str(e)}")
 
-        # Reset button (only shown mid-conversation)
         if st.session_state.claude_history:
-            if st.button("🗑️ Start a new conversation", key="clear_chat"):
+            if st.button("Start a new conversation", key="clear_chat", type="tertiary"):
                 st.session_state.claude_history = []
                 st.rerun()
 
-        # Info about API key setup
-        with st.expander("How to set up your API key"):
+        with st.expander("API key setup"):
             st.markdown("""
-            To use the Ask Claude feature, you need to add your Anthropic API key to Streamlit secrets:
+            Ask Claude needs an Anthropic API key in Streamlit secrets:
 
-            **For local development:**
-            1. Create a file `.streamlit/secrets.toml` in your project directory
-            2. Add: `ANTHROPIC_API_KEY = "your-api-key-here"`
+            - **Recommended:** `~/.streamlit/secrets.toml` (keeps the key out of the Dropbox-synced folder)
+            - Or `.streamlit/secrets.toml` next to `app.py`
 
-            **For Streamlit Cloud:**
-            1. Go to your app settings
-            2. Click "Secrets" in the sidebar
-            3. Add: `ANTHROPIC_API_KEY = "your-api-key-here"`
-
-            Get your API key at: https://console.anthropic.com/
+            Add the line `ANTHROPIC_API_KEY = "your-api-key-here"`. Get a key at https://console.anthropic.com/
             """)
 
     # Data health check — surfaces entry errors (one-sided matches, phantom teams,
     # name typos) so they get caught right after new FBC data is entered.
-    st.markdown("---")
+    st.divider()
     try:
         issues = validate_data(df, cups_df)
         if issues:
-            with st.expander(f"🩺 Data Health: {len(issues)} issue(s) found — click to review", expanded=False):
+            with st.expander(f"Data health: {len(issues)} issue(s) found — click to review", expanded=False):
                 for issue in issues:
                     st.warning(issue)
         else:
-            st.caption("🩺 Data health: all integrity checks pass "
+            st.caption("Data health: all integrity checks pass "
                        "(required columns filled, two-sided matches, valid W/L/T, exact "
                        "Singles/Doubles values, two teams per event, no name mismatches, "
                        "a Cups column for every event).")
     except Exception as e:
-        st.caption(f"🩺 Data health check could not run: {e}")
+        st.caption(f"Data health check could not run: {e}")
 
 if __name__ == "__main__":
     main()
