@@ -23,9 +23,9 @@ against it; see the PR that added this file):
   Nemesis     head-to-head (singles + doubles opponents), min 3 meetings, players
               with 10+ matches; ranked by W-L, then W (or L), then meetings
   Streaks     non-FTAS matches in date order; ties break streaks; min 10 matches
-  CAPA        fixed coefficients (1.757 skill, 0.0078 handicap) from the FBC12 fit;
-              skill = (career win% - 0.5) x n/(n+20); min 25 matches; FBC 8 credit
-              = stake/6.5 for players who missed the make-up singles
+  CAPA        (revised Oct 2026) stake-weighted ridge rating model over all head-to-head
+              matches, no handicap term, lambda by leave-one-cup-out CV; reported as
+              points in an FBC 13-format cup (3.25 + 4 x rating); min 24 matches
 """
 import re, sys, zipfile, argparse
 import numpy as np, pandas as pd
@@ -221,47 +221,59 @@ def skills(d,shrink=20,incl_ftas=True):
     g=L.groupby('P').agg(n=('wv','size'),wp=('wv','mean'))
     return ((g.wp-0.5)*g.n/(g.n+shrink)).to_dict()
 
-def capa(d,h,bs=1.757,bh=0.0078,shrink=20,incl_ftas=True,pmode='half',omode='mean',hmode='mean',eff8=4.5/6.5,partial8=None):
-    sk=skills(d,shrink,incl_ftas); HC=hc_percup(h)
-    acc={}
-    L=all_long(d)
-    for _,r in d.iterrows():
-        me=[p for p in (r['Player 1'],r['Player 2']) if isinstance(p,str) and p]
-        sd=r['Singles/Doubles']; st=float(r['Points at stake'])
-        if sd=='FTAS':
-            for p in me:
-                a=acc.setdefault(p,dict(pts=0,pa=0,oa=0,ha=0,cups=set())); a['pts']+=r['Points earned']; a['cups'].add(r.FBC)
-            continue
-        op=[r['Singles Opponent']] if sd=='Singles' else [o for o in (r['Opponent1'],r['Opponent2']) if isinstance(o,str) and o]
-        hk=all((x,r.FBC) in HC for x in me+op)
-        for p in me:
-            a=acc.setdefault(p,dict(pts=0,pa=0,oa=0,ha=0,cups=set())); a['pts']+=r['Points earned']; a['cups'].add(r.FBC)
-            q=[x for x in me if x!=p]
-            pc=(sk.get(q[0],0)/2 if pmode=='half' else sk.get(q[0],0)) if q else 0
-            oc=np.mean([sk.get(o,0) for o in op]) if omode=='mean' else np.sum([sk.get(o,0) for o in op])
-            a['pa']+= -st*bs*pc
-            a['oa']+= st*bs*oc
-            if hk:
-                if hmode=='mean': hv=np.mean([HC[(o,r.FBC)] for o in op])-np.mean([HC[(x,r.FBC)] for x in me])
-                elif hmode=='self': hv=np.mean([HC[(o,r.FBC)] for o in op])-HC[(p,r.FBC)]
-                else: hv=np.sum([HC[(o,r.FBC)] for o in op])-np.sum([HC[(x,r.FBC)] for x in me])
-                a['ha']+= -st*bh*hv
-    return acc,sk
+CAPA_LAMBDA=30      # ridge penalty; chosen by leave-one-cup-out cross-validation (Oct 2026)
+CAPA_MIN_MATCHES=24 # matches incl. FTAS
 
-def capa_table(d,h,min_matches=25):
-    acc,sk=capa(d,h)
-    L=all_long(d); n=L.groupby('P').size()
-    st8=L[L.FBC==8].groupby('P')['Points at stake'].sum()
+def capa_matches(df,h):
+    """One record per head-to-head match (FTAS excluded): sides A/B, A's share, stake."""
+    X=df[df['Singles/Doubles']!='FTAS']; out=[]
+    for mid,g in X.groupby('UniqueMatchID',sort=False):
+        a,b=g.iloc[0],g.iloc[1]
+        A=[p for p in (a['Player 1'],a['Player 2']) if isinstance(p,str) and p]
+        B=[p for p in (b['Player 1'],b['Player 2']) if isinstance(p,str) and p]
+        out.append(dict(FBC=int(a.FBC),A=A,B=B,stake=float(a['Points at stake']),share=a.W+0.5*a['T']))
+    return pd.DataFrame(out)
+
+def capa_fit(M,players,lam):
+    """Stake-weighted ridge fit of  share_A - 0.5 = mean(r over A) - mean(r over B)."""
+    ix={p:i for i,p in enumerate(players)}; X=np.zeros((len(M),len(players)))
+    for k,r in enumerate(M.itertuples()):
+        for p in r.A: X[k,ix[p]]+=1/len(r.A)
+        for p in r.B: X[k,ix[p]]-=1/len(r.B)
+    w=M.stake.values; y=M.share.values-0.5
+    G=(X*w[:,None]).T@X+lam*np.eye(len(players))
+    beta=np.linalg.solve(G,(X*w[:,None]).T@y)
+    s2=(w*(y-X@beta)**2).sum()/w.sum()
+    sd=np.sqrt(np.diag(s2*np.linalg.inv(G)))
+    return {p:beta[i] for i,p in enumerate(players)},{p:sd[i] for i,p in enumerate(players)}
+
+def capa_table(d,h,lam=CAPA_LAMBDA,min_matches=CAPA_MIN_MATCHES):
+    """CAPA = 3.25 + 4 x rating: expected points in an FBC 13-format cup (four 1-pt doubles
+    matches, one 2-pt singles, FTAS worth 0.25 on average) with an average partner against
+    average opponents. Exact decomposition from the ridge normal equations:
+      rating = (raw + partner + opponent) x V/(V+lam), V = sum of stake/c^2 (c = side size)."""
+    M=capa_matches(d,h)
+    players=sorted({p for x in M.A for p in x}|{p for x in M.B for p in x})
+    r,sd=capa_fit(M,players,lam)
+    L=all_long(d); nm=L.groupby('P').size(); cups=L.groupby('P').FBC.nunique()
+    acc={}
+    for x in M.itertuples():
+        for side,opp,sh in ((x.A,x.B,x.share),(x.B,x.A,1-x.share)):
+            c=len(side); v=x.stake/c**2
+            for p in side:
+                a=acc.setdefault(p,[0.0,0.0,0.0,0.0]); q=[t for t in side if t!=p]
+                a[0]+=v; a[1]+=v*c*(sh-0.5); a[2]-=v*(r[q[0]] if q else 0.0); a[3]+=v*sum(r[o] for o in opp)
     out=[]
-    for p,a in acc.items():
-        if n.get(p,0)<min_matches: continue
-        cups=len(a['cups']); eff=cups-(1-min(1,st8[p]/6.5) if p in st8 else 0)
-        r=(p,cups,round(eff,2),round(a['pts']/eff,4),round(a['pa']/eff,4),round(a['oa']/eff,4),round(a['ha']/eff,4))
-        out.append(r)
-    out.sort(key=lambda r:-(r[3]+r[4]+r[5]+r[6]))
-    belts=dict(dragon=max(out,key=lambda r:r[5])[0],spoon=min(out,key=lambda r:r[4])[0],
-               sisyphus=max(out,key=lambda r:r[4])[0],billy=min(out,key=lambda r:r[5])[0])
-    return out,belts
+    for p,(V,u,P,O) in acc.items():
+        if nm.get(p,0)<min_matches: continue
+        u,P,O=u/V,P/V,O/V; adj=u+P+O; rr=adj*V/(V+lam)
+        assert abs(rr-r[p])<1e-9
+        out.append((p,int(cups[p]),int(nm[p]),round(3.25+4*u,2),round(4*P,2),round(4*O,2),round(4*(rr-adj),2),round(4*sd[p],2)))
+    out.sort(key=lambda t:-(t[3]+t[4]+t[5]+t[6]))
+    belts=dict(dragon=max(out,key=lambda t:t[5])[0],spoon=min(out,key=lambda t:t[4])[0],
+               sisyphus=max(out,key=lambda t:t[4])[0],billy=min(out,key=lambda t:t[5])[0])
+    return out,belts,len(M)
+
 def all_tables(df,h,wb,N):
     d=df[df.FBC<=N]
     return {'Sandbagger Index':sandbagger(d,h,N),'Clutch Rating':clutch(d),'Chemistry Index':chemistry(d),
@@ -347,22 +359,65 @@ def run(SRC,OUT):
     p=path('Form Guide'); s=parts[p].decode()
     t=cell_text(s,'B2') or str(wb['Form Guide']['B2'].value); s=set_text(s,'B2',re.sub(r'into FBC \d+',f'into FBC {N+1}',t)); parts[p]=s.encode()
 
-    # CAPA: fixed 23 rows (10-32), keep formula cells, drop cached values
-    capa,belts=T['CAPA PPC']; assert len(capa)==23
+    # CAPA: rebuild rows 3-7 (method notes), 9 (header), the table, and the belts block
+    capa,belts,nmatch=T['CAPA PPC']
     p=path('CAPA PPC'); s=parts[p].decode()
-    for i,r in enumerate(clean(capa)):
-        rn=10+i; x=re.search(r'<row r="%d"[^>]*>.*?</row>'%rn,s,re.S).group(0); y=x
-        for j,col in enumerate('BCDEFGH'):
-            m=re.search(r'<c r="%s%d" s="(\d+)"[^>]*?(?:/>|>.*?</c>)'%(col,rn),y,re.S)
-            y=y.replace(m.group(0),cell(f'{col}{rn}',r[j],m.group(1)),1)
-        y=re.sub(r'(<c r="[IJ]%d"[^>]*>(?:<f[^>]*>[^<]*</f>|<f[^>]*/>))<v>[^<]*</v>'%rn,r'\1',y)
-        s=s.replace(x,y,1)
-    for ref,key in (('C35','dragon'),('C36','spoon'),('C37','sisyphus'),('C38','billy')): s=set_text(s,ref,belts[key])
-    def txt(ref): return cell_text(s,ref) or str(wb['CAPA PPC'][ref].value)
-    for ref,pat,rep in (('C3',r'Through FBC\d+\.',f'Through FBC{N}.'),('C6',r'FBC1–\d+',f'FBC1–{N}'),('B34',r'through FBC\d+',f'through FBC{N}')):
-        s=set_text(s,ref,re.sub(pat,rep,txt(ref)))
-    t=re.sub(r' Coefficients carried forward.*$','',txt('C4'))
-    s=set_text(s,'C4',t+' Coefficients carried forward from the FBC12 fit; not re-estimated since.')
+    rowsxml=re.findall(r'(<row r="(\d+)"[^>]*?(?:/>|>.*?</row>))',s,re.S)
+    R={int(n):x for x,n in rowsxml}
+    def rowtext(x): return ''.join(re.findall(r'<t[^>]*>([^<]*)</t>',x))+''.join(sstext(int(v)) for v in re.findall(r't="s"><v>(\d+)</v>',x))
+    bh=[n for n,x in R.items() if 'Belts (through' in rowtext(x)][0]
+    belt_rows=[R[bh+k] for k in range(1,5)]
+    hdr=R[9]; dat=R[10]; dstyle=rowcells(dat); rattr=re.match(r'<row r="\d+"([^>]*)>',dat).group(1)
+    notes={3:('What it measures',f'Expected points in a standard FBC 13-format cup (four 1-pt doubles matches, one 2-pt singles match, FTAS) with an average partner against average opponents. Through FBC{N}.'),
+           4:('Model',f'Joint rating fit to all {nmatch} head-to-head matches (FTAS excluded): side A share − 0.5 = mean(A ratings) − mean(B ratings), weighted by points at stake, ridge-regularized (λ={CAPA_LAMBDA}, chosen by leave-one-cup-out cross-validation). CAPA = 3.25 + 4 × rating.'),
+           5:('Columns','Raw = own results only, in standard-cup points. Partner / Opponent Adj = removes the help or hurt from partners’ and opponents’ ratings. Shrinkage = pull toward average for players with fewer matches. CAPA = Raw + Partner + Opponent + Shrinkage.'),
+           6:('Handicaps','No separate handicap term. Strokes already level matches: adding an opponent-minus-own index term made out-of-sample predictions worse, so it was dropped (Oct 2026 revision).'),
+           7:('Precision',f'The signal is weak: the model predicts match results about 2% better than a coin flip (the previous win%-based CAPA was worse than a coin flip at predicting the next cup). ± = one standard deviation; gaps smaller than that are noise. Min {CAPA_MIN_MATCHES} matches.')}
+    for rn,(lab,txt_) in notes.items():
+        s=set_text(s,f'B{rn}',lab); s=set_text(s,f'C{rn}',txt_)
+        ht=15*max(2,-(-len(txt_)//70))   # merged C:J is ~75 characters wide
+        s=re.sub(r'(<row r="%d"[^>]*?) ht="[\d.]+"'%rn,lambda m:f'{m.group(1)} ht="{ht}"',s,count=1)
+    R={int(n):x for x,n in re.findall(r'(<row r="(\d+)"[^>]*?(?:/>|>.*?</row>))',s,re.S)}
+    # Top-align the note labels (B3:B7) next to their wrapped text: reuse or add one cell style.
+    sty=parts['xl/styles.xml'].decode(); cx=re.search(r'<cellXfs count="(\d+)">(.*?)</cellXfs>',sty,re.S)
+    xfs=re.findall(r'<xf [^>]*?(?:/>|>.*?</xf>)',cx.group(2),re.S)
+    lab_s=re.search(r'<c r="B3" s="(\d+)"',s).group(1)
+    want=re.sub(r'/>$','',xfs[int(lab_s)]).replace('<alignment vertical="top"/></xf>','')
+    want=want.rstrip('>') if want.endswith('>') and not want.endswith('/>') else want
+    top=f'{want} applyAlignment="1"><alignment vertical="top"/></xf>' if 'vertical="top"' not in xfs[int(lab_s)] else xfs[int(lab_s)]
+    if top in xfs: top_i=xfs.index(top)
+    else:
+        top_i=len(xfs)
+        sty=sty.replace(cx.group(0),f'<cellXfs count="{top_i+1}">'+cx.group(2)+top+'</cellXfs>')
+        parts['xl/styles.xml']=sty.encode()
+    for rn in range(3,8): s=re.sub(r'<c r="B%d" s="\d+"'%rn,f'<c r="B{rn}" s="{top_i}"',s)
+    s=s.replace('<col min="3" max="3" width="6" customWidth="1"/>','<col min="3" max="3" width="11" customWidth="1"/>')
+    heads=['Player','Cups','Matches','Raw PPC','Partner Adj','Opponent Adj','Shrinkage','CAPA PPC','± (1 SD)']
+    newhdr=re.sub(r'<c r="([A-J])9"( s="\d+")[^>]*?(?:/>|>.*?</c>)',lambda m:f'<c r="{m.group(1)}9"{m.group(2)} t="inlineStr"><is><t xml:space="preserve">{escape(heads["BCDEFGHIJ".index(m.group(1))])}</t></is></c>',hdr)
+    st={c:dstyle[c] for c in 'BCDEFGHIJ'}; numst=dstyle['E']
+    body=[]
+    for i,t in enumerate(clean(capa)):
+        rn=10+i; c=[cell(f'B{rn}',t[0],st['B']),cell(f'C{rn}',t[1],st['C']),cell(f'D{rn}',t[2],st['C'])]
+        for col,v in zip('EFGH',t[3:7]): c.append(cell(f'{col}{rn}',v,numst))
+        c.append(f'<c r="I{rn}" s="{st["I"]}"><f>E{rn}+F{rn}+G{rn}+H{rn}</f></c>')
+        c.append(cell(f'J{rn}',t[7],numst))
+        body.append(f'<row r="{rn}"{rattr}>'+''.join(c)+'</row>')
+    last=9+len(capa); b0=last+2
+    def renum(x,old,new): return re.sub(r'(r="[A-J]?)%d"'%old,lambda m:f'{m.group(1)}{new}"',x)
+    bx=[renum(R[bh],bh,b0)]
+    for k,(x,key) in enumerate(zip(belt_rows,('dragon','spoon','sisyphus','billy'))):
+        y=renum(x,bh+1+k,b0+1+k); y=set_text(y,f'C{b0+1+k}',belts[key]); bx.append(y)
+    bx[0]=set_text(bx[0],f'B{b0}',f'Belts (through FBC{N})')
+    keep=''.join(R[n] for n in sorted(R) if n<9)
+    a0=s.index('<sheetData>')+len('<sheetData>'); a1=s.index('</sheetData>')
+    s=s[:a0]+keep+newhdr+''.join(body)+f'<row r="{last+1}"{rattr}/>'+''.join(bx)+s[a1:]
+    for rn in range(3,8): s=re.sub(r'<c r="B%d" s="\d+"'%rn,f'<c r="B{rn}" s="{top_i}"',s)
+    s=re.sub(r'<mergeCell ref="D\d+:J\d+"/>','',s)
+    mc=''.join(f'<mergeCell ref="D{b0+k}:J{b0+k}"/>' for k in range(1,5))
+    s=re.sub(r'<mergeCells count="\d+">',lambda m:'<mergeCells count="9">'+mc,s)
+    s=re.sub(r'<conditionalFormatting sqref="[HJ]\d+:[HJ]\d+">.*?</conditionalFormatting>','',s,flags=re.S)
+    s=re.sub(r'<conditionalFormatting sqref="([FGI])10:[FGI]\d+">',lambda m:f'<conditionalFormatting sqref="{m.group(1)}10:{m.group(1)}{last}">',s)
+    s=re.sub(r'<dimension ref="[^"]+"/>',f'<dimension ref="B1:J{b0+4}"/>',s)
     parts[p]=s.encode()
     with zipfile.ZipFile(OUT,'w',zipfile.ZIP_DEFLATED) as w:
         for i in infos: w.writestr(i,parts[i.filename])
