@@ -19,6 +19,19 @@ It appends the Archives rows, adds the Cups column, runs the app's Data Health
 check, and refuses to write if anything is flagged. Then commit, push, and open a
 pull request; the owner merges. See README "Importing a cup with Claude".
 
+## Recomputing the analytics tabs
+
+After a cup is imported (and its Handicaps and Cups columns exist), refresh CAPA PPC
+and the eight analytics tabs with:
+
+```bash
+python tools/recompute_analytics.py
+```
+
+It rewrites only those nine worksheet parts, using every cup in Archives. The method
+notes are in the script's docstring. Add the new cup's official score to `OFFICIAL`
+in the script if it differs from the Archives team totals.
+
 ## Editing the workbook
 
 Never load-and-save `FBC_Data.xlsx` with openpyxl, pandas or similar: that drops

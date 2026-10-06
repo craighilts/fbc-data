@@ -72,6 +72,13 @@ simply left out, and nothing downstream can tell. Still by hand afterwards, and 
 because they live in workbook tabs the app does not read: the Handicaps column, the
 Ratings row, the Difficulty Graph row, and Captain Size on the Cups tab.
 
+Then refresh the analytics tabs (CAPA PPC, Sandbagger, Chemistry, Clutch, Pythagorean
+Luck, Form Guide, MVP Hall of Fame, Nemesis & Patsy, Streak Tracker):
+
+```bash
+python tools/recompute_analytics.py
+```
+
 ### Archives sheet — match results
 
 This is the main data sheet. Each row is one match (from one team's perspective).
