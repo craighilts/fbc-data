@@ -184,6 +184,7 @@ FBC Data & Apps/
 ├── README.md            # This file
 ├── venv -> ~/.venvs/fbc-stats   # symlink; the real environment lives outside Dropbox
 └── .streamlit/
+    ├── config.toml      # Visual theme (colors, fonts) — no secrets
     └── secrets.toml     # API key (optional here; ~/.streamlit/secrets.toml also works)
 ```
 
@@ -202,7 +203,7 @@ update instructions. Its admin CSV export matches the Archives format below.
 
 | Tab | Description |
 |---|---|
-| Player Stats | Career stats, by-event breakdown, partner records, head-to-head, course performance |
+| Players | Career stats, by-event breakdown, partner records, head-to-head, course performance |
 | Leaderboard | Overall rankings sortable by points, win%, matches, events |
 | Cups | Cup results by event (captains, team scores, margins, top scorer) and by player |
 | Records | Win/unbeaten/losing streaks, active streaks, lopsided wins, perfect events, consecutive cups |
