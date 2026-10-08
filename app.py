@@ -2439,13 +2439,26 @@ def main():
                 with subtab1:
                     event_df = get_player_by_event(df, selected_player)
                     if not event_df.empty:
+                        cup_res = {}
+                        if cups_df is not None and selected_player in set(cups_df['Player']):
+                            crow = cups_df[cups_df['Player'] == selected_player].iloc[0]
+                            for num, col in _fbc_columns(cups_df):
+                                v = crow[col]
+                                if v in (1, '1'):
+                                    cup_res[num] = 'Won'
+                                elif v in (0, '0'):
+                                    cup_res[num] = 'Lost'
+                        event_df.insert(2, 'Cup', event_df['Event'].map(lambda e: cup_res.get(int(e), '')))
                         event_df = append_total_row(event_df, player_rows, 'Location')
+                        won = sum(1 for v in cup_res.values() if v == 'Won')
+                        event_df.loc[event_df.index[-1], 'Cup'] = f"{won} of {len(cup_res)}"
                         event_df = event_df.rename(columns={'Event': 'FBC'})
                         event_df['Win%'] = to_pct(event_df['Win%'])
                         show_table(event_df, {
                             **rec_cols,
+                            'Cup': st.column_config.TextColumn('Cup'),
                             'FBC': st.column_config.NumberColumn('FBC', format="%d", width='small'),
-                            'Win%': pct_column(bar=True),
+                            'Win%': pct_column(),
                             'Points': st.column_config.NumberColumn('Points', format="%.1f"),
                         }, fit=True)
                     else:
@@ -2458,7 +2471,7 @@ def main():
                         partner_df = append_total_row(
                             partner_df, player_rows[player_rows['Singles/Doubles'] == 'Doubles'], 'Partner')
                         partner_df['Win%'] = to_pct(partner_df['Win%'])
-                        show_table(partner_df, {'Win%': pct_column(bar=True),
+                        show_table(partner_df, {'Win%': pct_column(),
                                                 'Points': st.column_config.NumberColumn('Points', format="%.1f")})
                     else:
                         st.info("No doubles partner data available.")
@@ -2470,7 +2483,7 @@ def main():
                         h2h_df = append_total_row(
                             h2h_df, player_rows[player_rows['Singles/Doubles'].isin(['Singles', 'Doubles'])], 'Opponent')
                         h2h_df['Win%'] = to_pct(h2h_df['Win%'])
-                        show_table(h2h_df, {**rec_cols, 'Win%': pct_column(bar=True)})
+                        show_table(h2h_df, {**rec_cols, 'Win%': pct_column()})
                     else:
                         st.info("No head-to-head data available.")
 
@@ -2480,7 +2493,7 @@ def main():
                         course_df = append_total_row(
                             course_df, player_rows[player_rows['Course'].notna()], 'Course')
                         course_df['Win%'] = to_pct(course_df['Win%'])
-                        show_table(course_df, {**rec_cols, 'Win%': pct_column(bar=True),
+                        show_table(course_df, {**rec_cols, 'Win%': pct_column(),
                                                'Points': st.column_config.NumberColumn('Points', format="%.1f")})
                     else:
                         st.info("No course data available.")
