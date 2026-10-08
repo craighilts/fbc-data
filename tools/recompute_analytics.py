@@ -191,8 +191,8 @@ def streaks(d,order='date'):
     return sorted(out,key=lambda x:(-x[2],x[3],-x[1],x[0]))
 
 # Official cup scores (winner, loser) per By-Laws Annex B; FBC 8 includes the later make-up singles (26-16.5); FBC 13 from Archives
-OFFICIAL={1:(13,11),2:(18,14),3:(22,18),4:(22,18.5),5:(22.5,18),6:(22,18.5),7:(24.5,21),
-          8:(26,16.5),9:(23,17.5),10:(23,22),11:(24,16.5),12:(28,22)}
+OFFICIAL={1:(13,11),2:(18,14),3:(22,18),4:(22,18.5),5:(22.5,18),6:(21,19.5),7:(24.5,21),
+          8:(26,16.5),9:(21,19.5),10:(23,22),11:(24,16.5),12:(28,22)}
 def pythag2(wb,N,d=None):
     def score(f):
         if f in OFFICIAL: return OFFICIAL[f]
