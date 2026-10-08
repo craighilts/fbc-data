@@ -2435,13 +2435,10 @@ def main():
                     'Doubles': st.column_config.TextColumn('Doubles'),
                     'Singles': st.column_config.TextColumn('Singles'),
                 }
-                total_note = ("<p class='section-note'>The Total row is the career line. "
-                              "Doubles and Singles exclude FTAS, so they won't always add up to Record.</p>")
 
                 with subtab1:
                     event_df = get_player_by_event(df, selected_player)
                     if not event_df.empty:
-                        st.markdown(total_note, unsafe_allow_html=True)
                         event_df = append_total_row(event_df, player_rows, 'Location')
                         event_df = event_df.rename(columns={'Event': 'FBC'})
                         event_df['Win%'] = to_pct(event_df['Win%'])
@@ -2457,8 +2454,7 @@ def main():
                 with subtab2:
                     partner_df = get_partner_performance(df, selected_player)
                     if not partner_df.empty:
-                        st.markdown("<p class='section-note'>Doubles record with each partner. "
-                                    "The Total row is the career doubles line.</p>", unsafe_allow_html=True)
+                        st.markdown("<p class='section-note'>Doubles record with each partner.</p>", unsafe_allow_html=True)
                         partner_df = append_total_row(
                             partner_df, player_rows[player_rows['Singles/Doubles'] == 'Doubles'], 'Partner')
                         partner_df['Win%'] = to_pct(partner_df['Win%'])
@@ -2470,10 +2466,7 @@ def main():
                 with subtab3:
                     h2h_df = get_head_to_head(df, selected_player)
                     if not h2h_df.empty:
-                        st.markdown("<p class='section-note'>Record against each opponent, singles and doubles "
-                                    "combined (FTAS has no individual opponent). The Total row counts each match once, "
-                                    "so it is less than the column sum: a doubles match appears under both opponents.</p>",
-                                    unsafe_allow_html=True)
+                        st.markdown("<p class='section-note'>Record against each opponent, singles and doubles combined.</p>", unsafe_allow_html=True)
                         h2h_df = append_total_row(
                             h2h_df, player_rows[player_rows['Singles/Doubles'].isin(['Singles', 'Doubles'])], 'Opponent')
                         h2h_df['Win%'] = to_pct(h2h_df['Win%'])
@@ -2484,7 +2477,6 @@ def main():
                 with subtab4:
                     course_df = get_course_performance(df, selected_player)
                     if not course_df.empty:
-                        st.markdown(total_note, unsafe_allow_html=True)
                         course_df = append_total_row(
                             course_df, player_rows[player_rows['Course'].notna()], 'Course')
                         course_df['Win%'] = to_pct(course_df['Win%'])
@@ -2923,32 +2915,18 @@ def main():
                 st.session_state.claude_history = []
                 st.rerun()
 
-        with st.expander("API key setup"):
-            st.markdown("""
-            Ask Claude needs an Anthropic API key in Streamlit secrets:
-
-            - **Recommended:** `~/.streamlit/secrets.toml` (keeps the key out of the Dropbox-synced folder)
-            - Or `.streamlit/secrets.toml` next to `app.py`
-
-            Add the line `ANTHROPIC_API_KEY = "your-api-key-here"`. Get a key at https://console.anthropic.com/
-            """)
-
     # Data health check — surfaces entry errors (one-sided matches, phantom teams,
-    # name typos) so they get caught right after new FBC data is entered.
-    st.divider()
+    # name typos). Shown only when something is wrong; tools/import_cup.py runs the
+    # same check before writing.
     try:
         issues = validate_data(df, cups_df)
-        if issues:
-            with st.expander(f"Data health: {len(issues)} issue(s) found — click to review", expanded=False):
-                for issue in issues:
-                    st.warning(issue)
-        else:
-            st.caption("Data health: all integrity checks pass "
-                       "(required columns filled, two-sided matches, valid W/L/T, exact "
-                       "Singles/Doubles values, two teams per event, no name mismatches, "
-                       "a Cups column for every event).")
     except Exception as e:
-        st.caption(f"Data health check could not run: {e}")
+        issues = [f"Data health check could not run: {e}"]
+    if issues:
+        st.divider()
+        with st.expander(f"Data health: {len(issues)} issue(s) found — click to review", expanded=False):
+            for issue in issues:
+                st.warning(issue)
 
 if __name__ == "__main__":
     main()
