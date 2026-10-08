@@ -180,6 +180,55 @@ def to_pct(series):
     return (series.astype(float) * 100).round(1)
 
 
+def _wlt(w, l, t):
+    return f"{int(w)}-{int(l)}-{int(t)}"
+
+
+def format_records(matches, key):
+    """Doubles and Singles W-L-T strings per `key` value (FTAS counts in neither).
+    Returns a DataFrame indexed by key with 'Doubles' and 'Singles' columns; '—' when
+    the player has no matches of that kind."""
+    out = {}
+    for fmt in ('Doubles', 'Singles'):
+        sub = matches[matches['Singles/Doubles'] == fmt]
+        g = sub.groupby(key)[['W', 'L', 'T']].sum()
+        out[fmt] = pd.Series({k: _wlt(r['W'], r['L'], r['T']) for k, r in g.iterrows()},
+                             dtype=object)
+    rec = pd.DataFrame(out).reindex(matches[key].dropna().unique())
+    return rec.fillna('—')
+
+
+def total_record(matches, fmt=None):
+    sub = matches if fmt is None else matches[matches['Singles/Doubles'] == fmt]
+    if sub.empty:
+        return '—'
+    return _wlt(sub['W'].sum(), sub['L'].sum(), sub['T'].sum())
+
+
+def append_total_row(table, matches, label_col, label='Total'):
+    """Append a career-total row computed from the underlying match rows (not by
+    summing the table, which would double-count doubles matches in head-to-head).
+    `matches` must carry W/L/T, Singles/Doubles and, if the table has Points,
+    'Points earned'. Win% is left as a 0-1 fraction, like the rows above it."""
+    w, l, t = matches['W'].sum(), matches['L'].sum(), matches['T'].sum()
+    n = w + l + t
+    row = {c: None for c in table.columns}
+    row[label_col] = label
+    if 'Record' in row:
+        row['Record'] = _wlt(w, l, t)
+    if 'Doubles' in row:
+        row['Doubles'] = total_record(matches, 'Doubles')
+    if 'Singles' in row:
+        row['Singles'] = total_record(matches, 'Singles')
+    if 'Win%' in row:
+        row['Win%'] = (w + 0.5 * t) / n if n else None
+    if 'Points' in row:
+        row['Points'] = matches['Points earned'].sum()
+    if 'Matches' in row:
+        row['Matches'] = int(n)
+    return pd.concat([table, pd.DataFrame([row])], ignore_index=True)
+
+
 def show_table(data, column_config=None, fit=False, **kwargs):
     """st.dataframe with house defaults. fit=True sizes the grid to show every row
     without an inner scrollbar (rows are 33px at the theme's 15px base font, plus the
@@ -450,13 +499,17 @@ def get_player_by_event(df, player):
     event_stats['Win%'] = (event_stats['W'] + 0.5 * event_stats['T']) / event_stats['Matches']
     event_stats['Record'] = event_stats.apply(lambda x: f"{int(x['W'])}-{int(x['L'])}-{int(x['T'])}", axis=1)
 
+    recs = format_records(player_matches, 'FBC')
+    event_stats['Doubles'] = event_stats['FBC'].map(recs['Doubles'])
+    event_stats['Singles'] = event_stats['FBC'].map(recs['Singles'])
+
     event_stats = event_stats.rename(columns={
         'FBC': 'Event',
         'Geographic Location': 'Location',
         'Points earned': 'Points'
     })
 
-    return event_stats[['Event', 'Location', 'Record', 'Win%', 'Points', 'Matches']].sort_values('Event')
+    return event_stats[['Event', 'Location', 'Record', 'Doubles', 'Singles', 'Win%', 'Points', 'Matches']].sort_values('Event')
 
 
 # Display-only spellings for the Archives 'Team' (captain) column. FBC 7 had co-captains
@@ -759,6 +812,7 @@ def get_head_to_head(df, player):
         if pd.notna(singles_opp) and singles_opp != player:
             opponents.append({
                 'Opponent': singles_opp,
+                'Singles/Doubles': row['Singles/Doubles'],
                 'W': row['W'],
                 'L': row['L'],
                 'T': row['T']
@@ -767,6 +821,7 @@ def get_head_to_head(df, player):
             if pd.notna(opp1) and opp1 != player:
                 opponents.append({
                     'Opponent': opp1,
+                    'Singles/Doubles': row['Singles/Doubles'],
                     'W': row['W'],
                     'L': row['L'],
                     'T': row['T']
@@ -774,6 +829,7 @@ def get_head_to_head(df, player):
             if pd.notna(opp2) and opp2 != player:
                 opponents.append({
                     'Opponent': opp2,
+                    'Singles/Doubles': row['Singles/Doubles'],
                     'W': row['W'],
                     'L': row['L'],
                     'T': row['T']
@@ -792,8 +848,11 @@ def get_head_to_head(df, player):
     opp_stats['Matches'] = opp_stats['W'] + opp_stats['L'] + opp_stats['T']
     opp_stats['Win%'] = (opp_stats['W'] + 0.5 * opp_stats['T']) / opp_stats['Matches']
     opp_stats['Record'] = opp_stats.apply(lambda x: f"{int(x['W'])}-{int(x['L'])}-{int(x['T'])}", axis=1)
+    recs = format_records(opp_df, 'Opponent')
+    opp_stats['Doubles'] = opp_stats['Opponent'].map(recs['Doubles'])
+    opp_stats['Singles'] = opp_stats['Opponent'].map(recs['Singles'])
 
-    return opp_stats[['Opponent', 'Record', 'Win%', 'Matches']].sort_values('Matches', ascending=False)
+    return opp_stats[['Opponent', 'Record', 'Doubles', 'Singles', 'Win%', 'Matches']].sort_values('Matches', ascending=False)
 
 def get_course_performance(df, player):
     """Get player's record by course."""
@@ -813,10 +872,14 @@ def get_course_performance(df, player):
     course_stats['Win%'] = (course_stats['W'] + 0.5 * course_stats['T']) / course_stats['Matches']
     course_stats['Record'] = course_stats.apply(lambda x: f"{int(x['W'])}-{int(x['L'])}-{int(x['T'])}", axis=1)
 
+    recs = format_records(player_matches, 'Course')
+    course_stats['Doubles'] = course_stats['Course'].map(recs['Doubles'])
+    course_stats['Singles'] = course_stats['Course'].map(recs['Singles'])
+
     course_stats = course_stats.rename(columns={'Points earned': 'Points'})
 
     # Most-played courses first: sorting by Win% put one-off 1-0-0 rounds at the top
-    return course_stats[['Course', 'Record', 'Win%', 'Points', 'Matches']].sort_values(
+    return course_stats[['Course', 'Record', 'Doubles', 'Singles', 'Win%', 'Points', 'Matches']].sort_values(
         ['Matches', 'Win%'], ascending=[False, False])
 
 @st.cache_data
@@ -2366,12 +2429,24 @@ def main():
                     "By event", "Partners", "Head-to-head", "By course"
                 ])
 
+                player_rows = df[(df['Player 1'] == selected_player) | (df['Player 2'] == selected_player)]
+                rec_cols = {
+                    'Record': st.column_config.TextColumn('Record'),
+                    'Doubles': st.column_config.TextColumn('Doubles'),
+                    'Singles': st.column_config.TextColumn('Singles'),
+                }
+                total_note = ("<p class='section-note'>The Total row is the career line. "
+                              "Doubles and Singles exclude FTAS, so they won't always add up to Record.</p>")
+
                 with subtab1:
                     event_df = get_player_by_event(df, selected_player)
                     if not event_df.empty:
+                        st.markdown(total_note, unsafe_allow_html=True)
+                        event_df = append_total_row(event_df, player_rows, 'Location')
                         event_df = event_df.rename(columns={'Event': 'FBC'})
                         event_df['Win%'] = to_pct(event_df['Win%'])
                         show_table(event_df, {
+                            **rec_cols,
                             'FBC': st.column_config.NumberColumn('FBC', format="%d", width='small'),
                             'Win%': pct_column(bar=True),
                             'Points': st.column_config.NumberColumn('Points', format="%.1f"),
@@ -2382,7 +2457,10 @@ def main():
                 with subtab2:
                     partner_df = get_partner_performance(df, selected_player)
                     if not partner_df.empty:
-                        st.markdown("<p class='section-note'>Doubles record with each partner.</p>", unsafe_allow_html=True)
+                        st.markdown("<p class='section-note'>Doubles record with each partner. "
+                                    "The Total row is the career doubles line.</p>", unsafe_allow_html=True)
+                        partner_df = append_total_row(
+                            partner_df, player_rows[player_rows['Singles/Doubles'] == 'Doubles'], 'Partner')
                         partner_df['Win%'] = to_pct(partner_df['Win%'])
                         show_table(partner_df, {'Win%': pct_column(bar=True),
                                                 'Points': st.column_config.NumberColumn('Points', format="%.1f")})
@@ -2392,17 +2470,25 @@ def main():
                 with subtab3:
                     h2h_df = get_head_to_head(df, selected_player)
                     if not h2h_df.empty:
-                        st.markdown("<p class='section-note'>Record against each opponent, singles and doubles combined.</p>", unsafe_allow_html=True)
+                        st.markdown("<p class='section-note'>Record against each opponent, singles and doubles "
+                                    "combined (FTAS has no individual opponent). The Total row counts each match once, "
+                                    "so it is less than the column sum: a doubles match appears under both opponents.</p>",
+                                    unsafe_allow_html=True)
+                        h2h_df = append_total_row(
+                            h2h_df, player_rows[player_rows['Singles/Doubles'].isin(['Singles', 'Doubles'])], 'Opponent')
                         h2h_df['Win%'] = to_pct(h2h_df['Win%'])
-                        show_table(h2h_df, {'Win%': pct_column(bar=True)})
+                        show_table(h2h_df, {**rec_cols, 'Win%': pct_column(bar=True)})
                     else:
                         st.info("No head-to-head data available.")
 
                 with subtab4:
                     course_df = get_course_performance(df, selected_player)
                     if not course_df.empty:
+                        st.markdown(total_note, unsafe_allow_html=True)
+                        course_df = append_total_row(
+                            course_df, player_rows[player_rows['Course'].notna()], 'Course')
                         course_df['Win%'] = to_pct(course_df['Win%'])
-                        show_table(course_df, {'Win%': pct_column(bar=True),
+                        show_table(course_df, {**rec_cols, 'Win%': pct_column(bar=True),
                                                'Points': st.column_config.NumberColumn('Points', format="%.1f")})
                     else:
                         st.info("No course data available.")
