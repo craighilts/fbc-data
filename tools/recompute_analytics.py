@@ -7,7 +7,7 @@ Usage:
 
 Run after tools/import_cup.py (and after the Handicaps and Cups columns for the new
 cup exist). Uses every cup in Archives. Like import_cup.py it edits only the nine
-analytics worksheet XML parts and copies everything else byte for byte; Excel
+analytics worksheet XML parts (plus the Stroke Data sheet and the workbook parts that list it) and copies everything else byte for byte; Excel
 recalculates on open (fullCalcOnLoad is already set).
 
 Methods (reverse-engineered from the FBC 12 snapshot in October 2026 and checked
@@ -23,6 +23,8 @@ against it; see the PR that added this file):
   Nemesis     head-to-head (singles + doubles opponents), min 3 meetings, players
               with 10+ matches; ranked by W-L, then W (or L), then meetings
   Streaks     non-FTAS matches in date order; ties break streaks; min 10 matches
+  Beats-Card  (added Oct 2026) block in Sandbagger Index I:N plus the Stroke Data tab;
+              stroke-aware ridge logistic model, method in tools/stroke_model.py
   CAPA        (revised Oct 2026) stake-weighted ridge rating model over all head-to-head
               matches, no handicap term, lambda by leave-one-cup-out CV; reported as
               points in an FBC 13-format cup (3.25 + 4 x rating); min 24 matches
@@ -30,6 +32,9 @@ against it; see the PR that added this file):
 import re, sys, zipfile, argparse
 import numpy as np, pandas as pd
 import openpyxl
+import os as _os
+sys.path.insert(0,_os.path.dirname(_os.path.abspath(__file__)))
+import stroke_model
 from xml.sax.saxutils import escape
 def load(path='/home/claude/fbc-data/FBC_Data.xlsx'):
     wb=openpyxl.load_workbook(path,read_only=True,data_only=True)
@@ -354,6 +359,11 @@ def run(SRC,OUT):
 
     for name in ['Sandbagger Index','Clutch Rating','Chemistry Index','Pythagorean Luck','Streak Tracker','Nemesis & Patsy']:
         rewrite_table(name,5,'B',clean(T[name]))
+    # Beats-Card block (Sandbagger Index I:N) and the Stroke Data tab -- see tools/stroke_model.py
+    SM,bc_rows,bc_info=stroke_model.fit(df[df.FBC<=N],h)
+    stroke_model.write_beats_card(parts,path('Sandbagger Index'),bc_rows)
+    stroke_model.write_stroke_sheet(parts,infos,stroke_model.stroke_rows(SM))
+    print(f"beats-card: {bc_info['n_matches']} matches ({bc_info['n_recorded']} with recorded handicaps); stroke-receiving side scores {bc_info['tilt']:.1%}")
     rewrite_table('Form Guide',5,'B',clean(T['Form Guide']),special='form')
     rewrite_table('MVP Hall of Fame',5,'B',clean(T['MVP Hall of Fame']))
     p=path('Form Guide'); s=parts[p].decode()
