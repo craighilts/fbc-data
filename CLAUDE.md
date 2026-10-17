@@ -32,6 +32,12 @@ It rewrites only those nine worksheet parts, using every cup in Archives. The me
 notes are in the script's docstring. Add the new cup's official score to `OFFICIAL`
 in the script if it differs from the Archives team totals.
 
+The same run refreshes the Beats-Card block (Sandbagger Index, columns I:N) and the
+**Stroke Data** tab via `tools/stroke_model.py`. Matches use the recorded handicaps in
+`tools/data/recorded_handicaps.csv` when present, else index × slope under that cup's
+rules. After a cup, append its pairing-grid handicaps to that CSV (same columns) so
+the new matches use recorded strokes.
+
 ## Editing the workbook
 
 Never load-and-save `FBC_Data.xlsx` with openpyxl, pandas or similar: that drops
